@@ -1,0 +1,9 @@
+# Pinned to the versions verified working against this server's low-level
+# MCP SDK usage (Server.list_tools()/call_tool() decorators) on 2026-09-16.
+# mcp>=2.0 removed that low-level API — installing it unpinned breaks both
+# the existing context tools and the pa_* tools. Do not unpin without
+# re-testing server_lowlevel.py and a full restart verification.
+mcp==1.27.0
+starlette==1.0.0
+uvicorn==0.44.0
+python-dotenv==1.2.3

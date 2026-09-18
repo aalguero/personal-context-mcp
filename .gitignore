@@ -1,0 +1,25 @@
+# secrets
+.env
+*.key
+*.key.pub
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.venv-new/
+
+# editor/backup cruft
+*~
+*.bak
+*.bak-*
+
+# logs
+*.log
+
+# stale local snapshots
+old/
+backup/
+
+# local claude code settings
+.claude/settings.local.json
