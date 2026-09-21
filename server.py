@@ -427,7 +427,14 @@ def main() -> None:
     store = ContextStore(Path(args.store))
     log.info("Context store: %s", store.path)
 
-    set_db(Db(url=os.environ["PA_DATABASE_URL"], actor="andre"))
+    dsn = os.environ.get("PA_DATABASE_URL")
+    if dsn:
+        set_db(Db(url=dsn, actor="andre"))
+    else:
+        log.warning(
+            "PA_DATABASE_URL is not set — the pa_* task tools will fail. "
+            "The context tools will work normally."
+        )
 
     if args.http_mode:
         run_http(store, args.host, args.port)
