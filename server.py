@@ -1,11 +1,11 @@
 """
 Personal Context MCP Server
 Exposes structured personal context to any MCP-compatible Claude client.
-Supports both stdio (Claude Code / desktop) and SSE/HTTP (claude.ai remote MCP).
+Supports stdio (Claude Code / desktop) and streamable HTTP (claude.ai remote MCP).
 
 Usage:
-  stdio:   python server.py
-  SSE:     python server.py --sse [--host 127.0.0.1] [--port 8765]
+  stdio:  python server.py
+  HTTP:   python server.py --http [--host 127.0.0.1] [--port 8765]
 """
 
 import argparse
@@ -24,7 +24,6 @@ from typing import Any
 # MCP SDK imports  (pip install mcp)
 # ---------------------------------------------------------------------------
 from mcp.server import Server
-from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     TextContent,
@@ -41,18 +40,15 @@ from pa.db import Db, set_db
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
-# SSE transport (bundled with mcp >= 1.0)
+# Streamable HTTP transport (bundled with mcp >= 1.0)
 try:
-    from mcp.server.sse import SseServerTransport
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
-    from starlette.routing import Route, Mount
-    from starlette.requests import Request
     from starlette.responses import Response
     import uvicorn
-    SSE_AVAILABLE = True
+    HTTP_AVAILABLE = True
 except ImportError:
-    SSE_AVAILABLE = False
+    HTTP_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("personal-context-mcp")
@@ -269,7 +265,7 @@ def build_server(store: ContextStore) -> Server:
 
 
 # ---------------------------------------------------------------------------
-# Entry point — stdio or SSE
+# Entry point — stdio or streamable HTTP
 # ---------------------------------------------------------------------------
 
 def run_stdio(store: ContextStore) -> None:
@@ -328,31 +324,21 @@ class AuthMiddleware:
 
 
 def run_http(store: ContextStore, host: str, port: int) -> None:
-    if not SSE_AVAILABLE:
-        log.error("HTTP transports require: pip install mcp[cli] starlette uvicorn")
+    if not HTTP_AVAILABLE:
+        log.error("The HTTP transport requires: pip install mcp[cli] starlette uvicorn")
         sys.exit(1)
 
     token = os.environ.get("PA_AUTH_TOKEN", "")
     if len(token) < 32:
         log.error(
             "PA_AUTH_TOKEN is unset or shorter than 32 characters; refusing to "
-            "start the HTTP transports unauthenticated."
+            "start the HTTP transport unauthenticated."
         )
         sys.exit(1)
     allow_path = os.environ.get("PA_AUTH_ALLOW_PATH", "0") == "1"
 
     import asyncio
     app_mcp = build_server(store)
-    sse_transport = SseServerTransport("/messages/")
-
-    async def handle_sse(request: Request) -> Response:
-        async with sse_transport.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await app_mcp.run(
-                streams[0], streams[1], app_mcp.create_initialization_options()
-            )
-        return Response()
 
     session_manager = StreamableHTTPSessionManager(
         app=app_mcp,
@@ -368,13 +354,12 @@ def run_http(store: ContextStore, host: str, port: int) -> None:
         async with session_manager.run():
             yield
 
-    starlette_app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse_transport.handle_post_message),
-        ],
-        lifespan=lifespan,
-    )
+    # No routes: this Starlette app exists only to own the lifespan above,
+    # which is what starts the StreamableHTTPSessionManager's task group.
+    # /mcp is dispatched directly to handle_mcp below, so it never looks like
+    # it's "used" — don't delete it as dead code, or every request fails with
+    # "Task group is not initialized".
+    starlette_app = Starlette(routes=[], lifespan=lifespan)
 
     async def dispatch(scope, receive, send):
         """Send /mcp (with or without a trailing slash) to the streamable HTTP
@@ -392,7 +377,6 @@ def run_http(store: ContextStore, host: str, port: int) -> None:
 
     asgi_app = AuthMiddleware(dispatch, token=token, allow_path=allow_path)
 
-    log.info("SSE server listening on http://%s:%d/sse", host, port)
     log.info("Streamable HTTP listening on http://%s:%d/mcp", host, port)
     if allow_path:
         log.info("Path-prefix auth fallback is ENABLED (PA_AUTH_ALLOW_PATH=1)")
@@ -400,9 +384,12 @@ def run_http(store: ContextStore, host: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Personal Context MCP Server")
-    parser.add_argument("--sse", action="store_true", help="Run SSE/HTTP transport instead of stdio")
-    parser.add_argument("--host", default="127.0.0.1", help="SSE bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8765, help="SSE port (default: 8765)")
+    parser.add_argument("--http", dest="http_mode", action="store_true",
+                         help="Run streamable-HTTP transport instead of stdio")
+    parser.add_argument("--sse", dest="http_mode", action="store_true",
+                         help=argparse.SUPPRESS)  # deprecated alias for --http; kept for the systemd unit
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765)")
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="Path to context.json file")
     args = parser.parse_args()
 
@@ -411,7 +398,7 @@ def main() -> None:
 
     set_db(Db(url=os.environ["PA_DATABASE_URL"], actor="andre"))
 
-    if args.sse:
+    if args.http_mode:
         run_http(store, args.host, args.port)
     else:
         run_stdio(store)
