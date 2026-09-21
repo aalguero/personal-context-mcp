@@ -18,7 +18,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -166,7 +166,7 @@ class ContextStore:
 
     @staticmethod
     def _now() -> str:
-        return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +245,10 @@ def build_server(store: ContextStore) -> Server:
 
     @app.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        arguments = arguments or {}
 
         if name.startswith("pa_"):
-            args = {k: v for k, v in (arguments or {}).items() if v is not None}
+            args = {k: v for k, v in arguments.items() if v is not None}
             return [TextContent(type="text", text=json.dumps(
                 pa_dispatch(name, args), ensure_ascii=False, indent=2, default=str))]
 
@@ -320,11 +321,12 @@ class AuthMiddleware:
     about what this server is or that authentication exists at all.
     """
 
+    PATH_PREFIX = "/t/"
+
     def __init__(self, app, token: str, allow_path: bool):
         self.app = app
         self.token = token
         self.allow_path = allow_path
-        self.path_prefix = f"/t/{token}/"
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -340,12 +342,14 @@ class AuthMiddleware:
             if hmac.compare_digest(supplied, self.token):
                 authorized = True
 
-        if not authorized and self.allow_path and scope["path"].startswith(self.path_prefix):
-            authorized = True
-            new_path = "/" + scope["path"][len(self.path_prefix):]
-            scope = dict(scope)
-            scope["path"] = new_path
-            scope["raw_path"] = new_path.encode("utf-8")
+        if not authorized and self.allow_path and scope["path"].startswith(self.PATH_PREFIX):
+            candidate, _, remainder = scope["path"][len(self.PATH_PREFIX):].partition("/")
+            if hmac.compare_digest(candidate, self.token):
+                authorized = True
+                new_path = "/" + remainder
+                scope = dict(scope)
+                scope["path"] = new_path
+                scope["raw_path"] = new_path.encode("utf-8")
 
         if not authorized:
             response = Response(status_code=404)
