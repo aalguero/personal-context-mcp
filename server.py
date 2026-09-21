@@ -14,7 +14,9 @@ import hmac
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
@@ -130,7 +132,36 @@ class ContextStore:
             return {"meta": {"version": self.VERSION, "updated_at": self._now()}, "contexts": {}}
 
     def _write(self, data: dict) -> None:
-        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        """Write atomically: a crash mid-write must not truncate the store.
+
+        Write a temp file in the same directory, fsync it, then os.replace —
+        which is atomic on POSIX. Same directory matters, because replace
+        across filesystems is not atomic. Rotate up to 3 backups first, since
+        this file has no other recovery path.
+        """
+        self._rotate_backups()
+        payload = json.dumps(data, indent=2, ensure_ascii=False)
+        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".context-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+
+    def _rotate_backups(self, keep: int = 3) -> None:
+        if not self.path.exists():
+            return
+        for i in range(keep - 1, 0, -1):
+            src = self.path.with_suffix(self.path.suffix + f".{i}")
+            dst = self.path.with_suffix(self.path.suffix + f".{i + 1}")
+            if src.exists():
+                os.replace(src, dst)
+        shutil.copy2(self.path, self.path.with_suffix(self.path.suffix + ".1"))
 
     @staticmethod
     def _now() -> str:
