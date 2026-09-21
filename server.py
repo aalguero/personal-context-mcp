@@ -35,7 +35,8 @@ from mcp.types import (
 # ---------------------------------------------------------------------------
 # futile-pa (task/project backend, PostgreSQL-backed)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, "/home/dremon/futile-pa")
+FUTILE_PA_PATH = os.environ.get("FUTILE_PA_PATH", "/home/dremon/futile-pa")
+sys.path.insert(0, FUTILE_PA_PATH)
 from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
 from pa.db import Db, set_db
 
