@@ -6,13 +6,13 @@
 # python
 __pycache__/
 *.pyc
-.venv/
-.venv-new/
+.venv*/
 
 # editor/backup cruft
 *~
 *.bak
 *.bak-*
+\#*\#
 
 # logs
 *.log
@@ -20,6 +20,11 @@ __pycache__/
 # stale local snapshots
 old/
 backup/
+
+# futile-pa: personal task-plan decisions, dumps, backups
+**/scripts/task_plan.json
+*.dump
+backups/
 
 # local claude code settings
 .claude/settings.local.json

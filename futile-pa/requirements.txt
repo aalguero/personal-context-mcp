@@ -1,0 +1,9 @@
+# Runtime dependencies for futile-pa.
+#
+# psycopg 3 with the binary wheel — no libpq build step on the server.
+psycopg[binary]>=3.1
+# Optional but recommended: keeps a small pool so each tool call does not pay
+# for a TCP connect and auth round trip. pa/db.py falls back gracefully if absent.
+psycopg_pool>=3.1
+# RRULE expansion for fixed-schedule recurrence (RFC 5545).
+python-dateutil>=2.8
