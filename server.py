@@ -35,13 +35,25 @@ from mcp.types import (
 # ---------------------------------------------------------------------------
 # futile-pa (task/project backend, PostgreSQL-backed)
 # ---------------------------------------------------------------------------
-FUTILE_PA_PATH = os.environ.get("FUTILE_PA_PATH", "/home/dremon/futile-pa")
-sys.path.insert(0, FUTILE_PA_PATH)
-from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
-from pa.db import Db, set_db
-
+# ---------------------------------------------------------------------------
+# futile-pa (task/project backend, PostgreSQL-backed)
+# ---------------------------------------------------------------------------
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
+
+# load_dotenv MUST come before this: FUTILE_PA_PATH is read from the
+# environment, so reading it first silently ignores .env and always takes
+# the default. That bug hid for weeks because the default happened to be
+# correct, then broke the first restart after futile-pa moved into the repo.
+FUTILE_PA_PATH = os.environ.get(
+    "FUTILE_PA_PATH", str(Path(__file__).parent / "futile-pa")
+)
+if not (Path(FUTILE_PA_PATH) / "pa").is_dir():
+    sys.exit(f"futile-pa not found at {FUTILE_PA_PATH} — check FUTILE_PA_PATH in .env")
+sys.path.insert(0, FUTILE_PA_PATH)
+
+from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
+from pa.db import Db, set_db
 
 # Streamable HTTP transport (bundled with mcp >= 1.0)
 try:
