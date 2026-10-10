@@ -27,8 +27,14 @@ PA_PATH="$REPO_ROOT/futile-pa"
 VENV_PYTHON="$REPO_ROOT/.venv-new/bin/python"
 STATUS_FILE="/home/dremon/.personal-context/backup-status.json"
 LOCAL_COPY_DIR="/home/dremon/backups"
-SSH_KEY="/home/dremon/.ssh/futile_pa_backup"
-DARKSLIP_DEST="darkslip:/backups/futile-pa/"
+# Tailscale SSH authorizes by tailnet policy and login *user*, not by key —
+# it never reads authorized_keys, so a dedicated keypair here does nothing.
+# The policy accepts non-root logins to Andre's own devices; the account on
+# darkslip is "andre", not this machine's "dremon".
+DARKSLIP_SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15"
+DARKSLIP_HOST="andre@darkslip"
+DARKSLIP_REMOTE_DIR="/home/andre/backups/futile-pa"
+DARKSLIP_DEST="$DARKSLIP_HOST:$DARKSLIP_REMOTE_DIR/"
 DB_NAME="futile_assistant"
 DB_ROLE="musicbrainz"
 VERIFY_DB="pa_verify"
@@ -215,12 +221,20 @@ if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
 
     # -- darkslip, over SSH -------------------------------------------------
     if [[ "$RESULT" == "ok" ]]; then
-        if rsync -a -e "ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=15" \
+        if rsync -a -e "ssh $DARKSLIP_SSH_OPTS" \
             --mkpath "$ENCRYPTED_FILE" "$CHECKSUM_FILE" "$DARKSLIP_DEST"; then
-            REMOTE_SIZE="$(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=15 \
-                darkslip "stat -c%s /backups/futile-pa/$BASENAME" 2>/dev/null || true)"
+            REMOTE_SIZE="$(ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
+                "stat -c%s $DARKSLIP_REMOTE_DIR/$BASENAME" 2>/dev/null || true)"
             if [[ "$REMOTE_SIZE" == "$ENCRYPTED_BYTES" ]]; then
                 DEST_DARKSLIP="ok"
+                # Catch-up: darkslip is a desktop and may have been asleep on a
+                # previous night. Repair that now by sending any local archive
+                # it doesn't already have — best-effort, so a slow or partial
+                # catch-up never turns tonight's good backup into a failure.
+                rsync -a -e "ssh $DARKSLIP_SSH_OPTS" --ignore-existing \
+                    "$LOCAL_COPY_DIR"/futile-pa-*.tar.age \
+                    "$LOCAL_COPY_DIR"/futile-pa-*.tar.age.sha256 \
+                    "$DARKSLIP_DEST" 2>/dev/null || true
             else
                 DEST_DARKSLIP="failed"
                 fail "darkslip copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_SIZE:-unreachable})"
@@ -280,14 +294,14 @@ prune_local() {
 
 prune_darkslip() {
     local to_delete
-    to_delete=$(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=15 darkslip \
-        "find /backups/futile-pa -maxdepth 1 -name 'futile-pa-*.tar.age' -printf '%f\n'" \
+    to_delete=$(ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
+        "find $DARKSLIP_REMOTE_DIR -maxdepth 1 -name 'futile-pa-*.tar.age' -printf '%f\n'" \
         2>/dev/null | python3 "$PRUNE_HELPER")
     [[ -z "$to_delete" ]] && return 0
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
-        ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=15 darkslip \
-            "rm -f /backups/futile-pa/$f /backups/futile-pa/$f.sha256" 2>/dev/null || true
+        ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
+            "rm -f $DARKSLIP_REMOTE_DIR/$f $DARKSLIP_REMOTE_DIR/$f.sha256" 2>/dev/null || true
     done <<< "$to_delete"
 }
 
