@@ -21,6 +21,7 @@ Run:  PA_DATABASE_URL=... python3 tests/test_smoke.py
 
 from __future__ import annotations
 
+import atexit
 import datetime as _dt
 import json
 import os
@@ -93,6 +94,10 @@ def section(t: str) -> None:
 # ---------------------------------------------------------------------------
 db = Db(actor="andre", use_pool=True)
 set_db(db)
+# Closing explicitly, rather than leaving it to psycopg_pool's own atexit
+# handler, is what the public API is for (Db.close()). Registered here so it
+# still runs on sys.exit() at the bottom of the file.
+atexit.register(db.close)
 
 section("Tool surface")
 from pa.tools import HANDLERS, TOOL_PREFIX  # noqa: E402
@@ -264,8 +269,9 @@ section("Projects")
 health = repo.project_tree()
 check("tree includes areas and children", len(health) >= 24, str(len(health)))
 stalled = repo.stalled_projects()
-check("stalled projects detected (Food, Health, Outdoors have no tasks)",
-      any(p["name"] in ("Plan — Father", "Plan — Son", "Plan — Daughter") for p in stalled),
+plan_ids = {repo.project_get(s)["id"] for s in ("plan-father", "plan-son", "plan-daughter")}
+check("stalled projects detected (person plans with no tasks)",
+      any(p["id"] in plan_ids for p in stalled),
       str([p["name"] for p in stalled][:6]))
 check("areas excluded from stalled list", all(p["kind"] != "area" for p in stalled))
 
@@ -281,7 +287,8 @@ check("project health counts tasks", garden["open_tasks"] >= 3, str(garden["open
 area = repo.project_get("house-land")
 expected_path = f"{area['name']} / {garden['name']}"
 check("project path resolves", garden["path"] == expected_path, garden["path"])
-check("ambiguous-free partial match works", repo.project_get("wealth")["name"] == "Wealth Transition")
+check("ambiguous-free partial match works",
+      repo.project_get("wealth")["id"] == repo.project_get("wealth-transition")["id"])
 rev = repo.project_review("native-garden", note="Beds ready; pickup scheduling is the bottleneck.")
 check("review resets the clock", rev.get("last_reviewed_on") == TODAY.isoformat())
 
