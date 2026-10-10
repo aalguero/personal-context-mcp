@@ -243,7 +243,7 @@ except Exception as exc:
 
 garden = repo.project_get("native-garden")
 check("project health counts tasks", garden["open_tasks"] >= 3, str(garden["open_tasks"]))
-check("project path resolves", garden["path"] == "House & Land / Native Plant Garden", garden["path"])
+check("project path resolves", garden["path"] == "Brook House / Native Plant Garden", garden["path"])
 check("ambiguous-free partial match works", repo.project_get("wealth")["name"] == "Wealth Transition")
 rev = repo.project_review("native-garden", note="Beds ready; pickup scheduling is the bottleneck.")
 check("review resets the clock", rev.get("last_reviewed_on") == TODAY.isoformat())
