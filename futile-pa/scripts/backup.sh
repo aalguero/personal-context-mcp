@@ -105,6 +105,16 @@ fail() {
     echo "backup.sh: FAILED: $1" >&2
 }
 
+# A destination (darkslip/B2) failing does not make the backup untrustworthy
+# -- verification and encryption already happened, and the local copy is
+# real. It just means this run has one fewer offsite copy, which is what
+# offsite_copies/the ok-vs-degraded split exists to say precisely. So this
+# logs without touching RESULT; the top-level "error" field stays reserved
+# for "nothing trustworthy exists" (see fail() above).
+dest_error() {
+    echo "backup.sh: $1" >&2
+}
+
 # ---------------------------------------------------------------------------
 # 4. Dump, in both formats.
 # ---------------------------------------------------------------------------
@@ -237,11 +247,11 @@ if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
                     "$DARKSLIP_DEST" 2>/dev/null || true
             else
                 DEST_DARKSLIP="failed"
-                fail "darkslip copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_SIZE:-unreachable})"
+                dest_error "darkslip copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_SIZE:-unreachable})"
             fi
         else
             DEST_DARKSLIP="failed"
-            fail "rsync to darkslip failed"
+            dest_error "rsync to darkslip failed"
         fi
     fi
 
@@ -259,16 +269,31 @@ if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
                     DEST_B2="ok"
                 else
                     DEST_B2="failed"
-                    fail "B2 copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_B2_SIZE:-unreachable})"
+                    dest_error "B2 copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_B2_SIZE:-unreachable})"
                 fi
             else
                 DEST_B2="failed"
-                fail "rclone copy to B2 failed"
+                dest_error "rclone copy to B2 failed"
             fi
         else
             DEST_B2="skipped (not configured)"
         fi
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8b. Classify the run. "ok" and "degraded" both mean verification, encryption
+#     and the local copy all happened -- the difference is whether a copy also
+#     left this machine. "failed" means none of that can be trusted (fail()
+#     already set it). Computed here, once, rather than threading a third
+#     state through every destination check above.
+# ---------------------------------------------------------------------------
+OFFSITE_COPIES=0
+[[ "$DEST_DARKSLIP" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
+[[ "$DEST_B2" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
+
+if [[ "$RESULT" == "ok" && "$OFFSITE_COPIES" -eq 0 ]]; then
+    RESULT="degraded"
 fi
 
 # ---------------------------------------------------------------------------
@@ -312,7 +337,7 @@ if [[ "$RESULT" == "ok" ]]; then
     # local + darkslip; B2 is cold storage and object-count pruning over
     # rclone's HTTP API is not worth the complexity at 23 files).
 else
-    echo "backup.sh: run failed — pruning skipped on all destinations" >&2
+    echo "backup.sh: result=$RESULT — pruning skipped on all destinations" >&2
 fi
 
 # ---------------------------------------------------------------------------
@@ -327,36 +352,44 @@ cat > "$TMP_STATUS" <<EOF
 {
   "last_attempt": "$RUN_STARTED",
   "last_success": $( [[ "$RESULT" == "ok" ]] && printf '"%s"' "$NOW" || printf 'null' ),
+  "last_verified_backup": $( [[ "$RESULT" == "ok" || "$RESULT" == "degraded" ]] && printf '"%s"' "$NOW" || printf 'null' ),
   "result": "$RESULT",
   "verified": $VERIFIED,
   "smoke_test": $( [[ -n "$SMOKE_LINE" ]] && printf '"%s"' "$SMOKE_LINE" || printf 'null' ),
   "git_head": "$GIT_HEAD",
   "encrypted_bytes": $ENCRYPTED_BYTES,
+  "offsite_copies": $OFFSITE_COPIES,
   "destinations": { "local": "$DEST_LOCAL", "darkslip": "$DEST_DARKSLIP", "b2": "$DEST_B2" },
   "error": $ERROR_MSG
 }
 EOF
 
-# Preserve the previous last_success if this run failed.
-if [[ "$RESULT" != "ok" && -f "$STATUS_FILE" ]]; then
-    PREV_SUCCESS="$(python3 -c "import json; print(json.load(open('$STATUS_FILE')).get('last_success') or '')" 2>/dev/null || true)"
-    if [[ -n "$PREV_SUCCESS" ]]; then
-        python3 -c "
+# last_success means "last run that was fully ok"; last_verified_backup means
+# "last run that produced a trustworthy local copy, ok or degraded". Neither
+# goes backwards: a run that didn't reach that bar keeps whatever the
+# previous run already achieved.
+if [[ -f "$STATUS_FILE" ]]; then
+    python3 -c "
 import json
 d = json.load(open('$TMP_STATUS'))
-d['last_success'] = '$PREV_SUCCESS'
+prev = json.load(open('$STATUS_FILE'))
+if d['last_success'] is None:
+    d['last_success'] = prev.get('last_success')
+if d['last_verified_backup'] is None:
+    d['last_verified_backup'] = prev.get('last_verified_backup')
 json.dump(d, open('$TMP_STATUS', 'w'), indent=2)
-"
-    fi
+" || true
 fi
 
 mv "$TMP_STATUS" "$STATUS_FILE"
 chmod 600 "$STATUS_FILE"
 
 # ---------------------------------------------------------------------------
-# On failure: create a task, guarded so a bad week makes one task, not seven.
+# On failure or degraded: create a task. Two separate titles, each guarded
+# independently, so a bad week makes one task per condition, not seven, and
+# the two severities never dedupe against each other.
 # ---------------------------------------------------------------------------
-if [[ "$RESULT" != "ok" ]]; then
+if [[ "$RESULT" == "failed" ]]; then
     PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
 import sys
 sys.path.insert(0, "$PA_PATH")
@@ -384,8 +417,33 @@ if not existing:
 PYEOF
 fi
 
-echo "backup.sh: result=$RESULT verified=$VERIFIED local=$DEST_LOCAL darkslip=$DEST_DARKSLIP b2=$DEST_B2"
+if [[ "$RESULT" == "degraded" ]]; then
+    PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
+import sys
+sys.path.insert(0, "$PA_PATH")
+from pa import repo
+from pa.db import get_db
+db = get_db()
+existing = db.row("""select id from pa.task
+                      where title = 'Backup has no off-site copy yet'
+                        and status not in ('done','dropped')""")
+if not existing:
+    repo.task_add(
+        title="Backup has no off-site copy yet",
+        project="admin-2026", status="next", importance=3,
+        effort_minutes=15, energy="low",
+        contexts=["computer"],
+        notes="Written automatically by scripts/backup.sh. A verified, "
+              "encrypted backup exists locally (see "
+              "/home/dremon/.personal-context/backup-status.json) but has not "
+              "reached darkslip or B2. Lower importance than the failure task: "
+              "the backup itself is good, it just isn't off this machine yet.",
+        source="manual", db=db)
+PYEOF
+fi
 
-if [[ "$RESULT" != "ok" ]]; then
+echo "backup.sh: result=$RESULT verified=$VERIFIED offsite_copies=$OFFSITE_COPIES local=$DEST_LOCAL darkslip=$DEST_DARKSLIP b2=$DEST_B2"
+
+if [[ "$RESULT" == "failed" ]]; then
     exit 1
 fi
