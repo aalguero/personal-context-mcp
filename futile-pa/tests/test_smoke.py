@@ -23,11 +23,46 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import pathlib
 import sys
 import tempfile
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+
+# ---------------------------------------------------------------------------
+# This suite writes: it seeds and mutates tasks, resets review dates, imports
+# fixtures. A suite that will happily write to whatever it is pointed at is
+# one hand-built connection string away from doing that to production — which
+# is exactly what happened on 2026-10-10. So: refuse to run against anything
+# but a disposable restore, before any connection opens. Allowlist, not a
+# denylist, so a name nobody thought of fails closed rather than running.
+#
+# Pure and argument-driven on purpose, so it can be tested with plain strings
+# and never needs a database to prove it works.
+def _scratch_db_name(url: str) -> str | None:
+    name = urlparse(url).path.lstrip("/")
+    if name == "pa_verify" or name.startswith("pa_scratch"):
+        return name
+    return None
+
+
+def _require_scratch_database() -> str:
+    url = os.environ.get("PA_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
+    name = _scratch_db_name(url)
+    if name is None:
+        actual = urlparse(url).path.lstrip("/") or "(no database in PA_DATABASE_URL)"
+        sys.exit(
+            f"test_smoke.py: refusing to run against database {actual!r} — "
+            "this suite writes data. Point PA_DATABASE_URL at a scratch "
+            "restore (pa_verify, or pa_scratch*) and try again."
+        )
+    return name
+
+
+_require_scratch_database()
 
 from pa import recurrence, repo                      # noqa: E402
 from pa.db import Db, set_db                         # noqa: E402
