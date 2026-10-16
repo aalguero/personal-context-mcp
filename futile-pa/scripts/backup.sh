@@ -2,8 +2,8 @@
 #
 # Encrypted, verified backup of the futile-pa system: the Postgres database,
 # context.json, .env, and enough of the systemd unit to rebuild from bare
-# metal. Ships to a local server copy, a darkslip rsync target, and B2 —
-# whichever of those destinations are configured.
+# metal. Ships to a local server copy, an rsync target on vocalassistant (the
+# always-on Pi), and B2 — whichever of those destinations are configured.
 #
 # Encryption key: PA_BACKUP_AGE_RECIPIENT is a public age key. This machine
 # can create backups it cannot read; that only holds if nobody ever puts the
@@ -29,12 +29,16 @@ STATUS_FILE="/home/dremon/.personal-context/backup-status.json"
 LOCAL_COPY_DIR="/home/dremon/backups"
 # Tailscale SSH authorizes by tailnet policy and login *user*, not by key —
 # it never reads authorized_keys, so a dedicated keypair here does nothing.
-# The policy accepts non-root logins to Andre's own devices; the account on
-# darkslip is "andre", not this machine's "dremon".
-DARKSLIP_SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15"
-DARKSLIP_HOST="andre@darkslip"
-DARKSLIP_REMOTE_DIR="/home/andre/backups/futile-pa"
-DARKSLIP_DEST="$DARKSLIP_HOST:$DARKSLIP_REMOTE_DIR/"
+# The policy accepts non-root logins to Andre's own devices. The target used
+# to be darkslip, a laptop that is off at 03:15, so it almost never landed;
+# vocalassistant is a Pi that has to be on. The Pi never holds the age private
+# key, so what lands there is inert. Its host key is pinned in
+# ~/.ssh/known_hosts (verified against the tailnet record) -- BatchMode
+# refuses an unknown key rather than prompting.
+PI_SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15"
+PI_HOST="dremon@vocalassistant"
+PI_REMOTE_DIR="/home/dremon/backups/futile-pa"
+PI_DEST="$PI_HOST:$PI_REMOTE_DIR/"
 DB_NAME="futile_assistant"
 DB_ROLE="musicbrainz"
 VERIFY_DB="pa_verify"
@@ -96,7 +100,7 @@ VERIFIED="false"
 SMOKE_LINE=""
 ENCRYPTED_BYTES=0
 DEST_LOCAL="skipped"
-DEST_DARKSLIP="skipped"
+DEST_PI="skipped"
 DEST_B2="skipped"
 
 fail() {
@@ -105,7 +109,7 @@ fail() {
     echo "backup.sh: FAILED: $1" >&2
 }
 
-# A destination (darkslip/B2) failing does not make the backup untrustworthy
+# A destination (vocalassistant/B2) failing does not make the backup untrustworthy
 # -- verification and encryption already happened, and the local copy is
 # real. It just means this run has one fewer offsite copy, which is what
 # offsite_copies/the ok-vs-degraded split exists to say precisely. So this
@@ -229,29 +233,30 @@ if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
         fail "local copy to $LOCAL_COPY_DIR did not verify"
     fi
 
-    # -- darkslip, over SSH -------------------------------------------------
+    # -- vocalassistant, over SSH ------------------------------------------
     if [[ "$RESULT" == "ok" ]]; then
-        if rsync -a -e "ssh $DARKSLIP_SSH_OPTS" \
-            --mkpath "$ENCRYPTED_FILE" "$CHECKSUM_FILE" "$DARKSLIP_DEST"; then
-            REMOTE_SIZE="$(ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
-                "stat -c%s $DARKSLIP_REMOTE_DIR/$BASENAME" 2>/dev/null || true)"
+        if rsync -a -e "ssh $PI_SSH_OPTS" \
+            --mkpath "$ENCRYPTED_FILE" "$CHECKSUM_FILE" "$PI_DEST"; then
+            REMOTE_SIZE="$(ssh $PI_SSH_OPTS "$PI_HOST" \
+                "stat -c%s $PI_REMOTE_DIR/$BASENAME" 2>/dev/null || true)"
             if [[ "$REMOTE_SIZE" == "$ENCRYPTED_BYTES" ]]; then
-                DEST_DARKSLIP="ok"
-                # Catch-up: darkslip is a desktop and may have been asleep on a
-                # previous night. Repair that now by sending any local archive
-                # it doesn't already have — best-effort, so a slow or partial
-                # catch-up never turns tonight's good backup into a failure.
-                rsync -a -e "ssh $DARKSLIP_SSH_OPTS" --ignore-existing \
+                DEST_PI="ok"
+                # Catch-up: the Pi is always on, but a network blip or reboot
+                # can still miss a night. Repair that now by sending any local
+                # archive it doesn't already have — best-effort, so a slow or
+                # partial catch-up never turns tonight's good backup into a
+                # failure.
+                rsync -a -e "ssh $PI_SSH_OPTS" --ignore-existing \
                     "$LOCAL_COPY_DIR"/futile-pa-*.tar.age \
                     "$LOCAL_COPY_DIR"/futile-pa-*.tar.age.sha256 \
-                    "$DARKSLIP_DEST" 2>/dev/null || true
+                    "$PI_DEST" 2>/dev/null || true
             else
-                DEST_DARKSLIP="failed"
-                dest_error "darkslip copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_SIZE:-unreachable})"
+                DEST_PI="failed"
+                dest_error "vocalassistant copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_SIZE:-unreachable})"
             fi
         else
-            DEST_DARKSLIP="failed"
-            dest_error "rsync to darkslip failed"
+            DEST_PI="failed"
+            dest_error "rsync to vocalassistant failed"
         fi
     fi
 
@@ -289,7 +294,7 @@ fi
 #     state through every destination check above.
 # ---------------------------------------------------------------------------
 OFFSITE_COPIES=0
-[[ "$DEST_DARKSLIP" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
+[[ "$DEST_PI" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
 [[ "$DEST_B2" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
 
 if [[ "$RESULT" == "ok" && "$OFFSITE_COPIES" -eq 0 ]]; then
@@ -300,8 +305,8 @@ fi
 # 9. Prune — only on a fully successful run, and never below one copy.
 #    The GFS decision itself lives in prune_backups.py (easier to get right,
 #    and to verify, than inline awk date arithmetic). It is a pure function
-#    of filenames, so the local and darkslip legs feed it a listing and then
-#    do their own deleting — darkslip never needs Python installed.
+#    of filenames, so the local and vocalassistant legs feed it a listing and
+#    then do their own deleting — the Pi never needs Python installed.
 # ---------------------------------------------------------------------------
 PRUNE_HELPER="$PA_PATH/scripts/prune_backups.py"
 
@@ -317,24 +322,24 @@ prune_local() {
     done <<< "$to_delete"
 }
 
-prune_darkslip() {
+prune_pi() {
     local to_delete
-    to_delete=$(ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
-        "find $DARKSLIP_REMOTE_DIR -maxdepth 1 -name 'futile-pa-*.tar.age' -printf '%f\n'" \
+    to_delete=$(ssh $PI_SSH_OPTS "$PI_HOST" \
+        "find $PI_REMOTE_DIR -maxdepth 1 -name 'futile-pa-*.tar.age' -printf '%f\n'" \
         2>/dev/null | python3 "$PRUNE_HELPER")
     [[ -z "$to_delete" ]] && return 0
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
-        ssh $DARKSLIP_SSH_OPTS "$DARKSLIP_HOST" \
-            "rm -f $DARKSLIP_REMOTE_DIR/$f $DARKSLIP_REMOTE_DIR/$f.sha256" 2>/dev/null || true
+        ssh $PI_SSH_OPTS "$PI_HOST" \
+            "rm -f $PI_REMOTE_DIR/$f $PI_REMOTE_DIR/$f.sha256" 2>/dev/null || true
     done <<< "$to_delete"
 }
 
 if [[ "$RESULT" == "ok" ]]; then
     [[ "$DEST_LOCAL" == "ok" ]] && prune_local "$LOCAL_COPY_DIR"
-    [[ "$DEST_DARKSLIP" == "ok" ]] && prune_darkslip
+    [[ "$DEST_PI" == "ok" ]] && prune_pi
     # B2 retention left to a lifecycle rule on the bucket (section 7 covers
-    # local + darkslip; B2 is cold storage and object-count pruning over
+    # local + vocalassistant; B2 is cold storage and object-count pruning over
     # rclone's HTTP API is not worth the complexity at 23 files).
 else
     echo "backup.sh: result=$RESULT — pruning skipped on all destinations" >&2
@@ -359,7 +364,7 @@ cat > "$TMP_STATUS" <<EOF
   "git_head": "$GIT_HEAD",
   "encrypted_bytes": $ENCRYPTED_BYTES,
   "offsite_copies": $OFFSITE_COPIES,
-  "destinations": { "local": "$DEST_LOCAL", "darkslip": "$DEST_DARKSLIP", "b2": "$DEST_B2" },
+  "destinations": { "local": "$DEST_LOCAL", "vocalassistant": "$DEST_PI", "b2": "$DEST_B2" },
   "error": $ERROR_MSG
 }
 EOF
@@ -436,13 +441,13 @@ if not existing:
         notes="Written automatically by scripts/backup.sh. A verified, "
               "encrypted backup exists locally (see "
               "/home/dremon/.personal-context/backup-status.json) but has not "
-              "reached darkslip or B2. Lower importance than the failure task: "
+              "reached vocalassistant or B2. Lower importance than the failure task: "
               "the backup itself is good, it just isn't off this machine yet.",
         source="manual", db=db)
 PYEOF
 fi
 
-echo "backup.sh: result=$RESULT verified=$VERIFIED offsite_copies=$OFFSITE_COPIES local=$DEST_LOCAL darkslip=$DEST_DARKSLIP b2=$DEST_B2"
+echo "backup.sh: result=$RESULT verified=$VERIFIED offsite_copies=$OFFSITE_COPIES local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2"
 
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
