@@ -330,7 +330,9 @@ prune_pi() {
     [[ -z "$to_delete" ]] && return 0
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
-        ssh $PI_SSH_OPTS "$PI_HOST" \
+        # -n: without it ssh reads this loop's stdin (the here-string) and
+        # swallows every filename after the first, so only one gets pruned.
+        ssh -n $PI_SSH_OPTS "$PI_HOST" \
             "rm -f $PI_REMOTE_DIR/$f $PI_REMOTE_DIR/$f.sha256" 2>/dev/null || true
     done <<< "$to_delete"
 }
