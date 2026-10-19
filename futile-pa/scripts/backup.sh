@@ -99,6 +99,7 @@ ERROR_MSG="null"
 VERIFIED="false"
 SMOKE_LINE=""
 ENCRYPTED_BYTES=0
+ROLES_INCLUDED="false"
 DEST_LOCAL="skipped"
 DEST_PI="skipped"
 DEST_B2="skipped"
@@ -111,8 +112,8 @@ fail() {
 
 # A destination (vocalassistant/B2) failing does not make the backup untrustworthy
 # -- verification and encryption already happened, and the local copy is
-# real. It just means this run has one fewer offsite copy, which is what
-# offsite_copies/the ok-vs-degraded split exists to say precisely. So this
+# real. It just means this run has one fewer off-machine copy, which is what
+# off_machine_copies/the ok-vs-degraded split exists to say precisely. So this
 # logs without touching RESULT; the top-level "error" field stays reserved
 # for "nothing trustworthy exists" (see fail() above).
 dest_error() {
@@ -196,6 +197,21 @@ if [[ "$RESULT" == "ok" ]]; then
 
     if [[ -f "$HOME/.config/systemd/user/personal-context-mcp.service" ]]; then
         cp "$HOME/.config/systemd/user/personal-context-mcp.service" "$BUNDLE/"
+    fi
+
+    # Roles are cluster-global (pg_authid), so pg_dump never includes them --
+    # yet the dump's grants depend on musicbrainz, pa_reader, mb_analytics_ro
+    # and postgres. Without this a bare-metal restore yields a database nobody
+    # may read. --no-role-passwords: musicbrainz's password is already in
+    # bundle/env; no reason to also ship a hash to attack offline. Non-fatal:
+    # the data itself is still restorable (pg_restore --no-privileges), so a
+    # failure here is recorded in the status file rather than failing the run.
+    if pg_dumpall -h localhost -U "$PGUSER" -l postgres --globals-only \
+        --no-role-passwords > "$BUNDLE/globals.sql"; then
+        ROLES_INCLUDED="true"
+    else
+        rm -f "$BUNDLE/globals.sql"
+        echo "backup.sh: pg_dumpall --globals-only failed — bundle has no role definitions" >&2
     fi
 
     git -C "$REPO_ROOT" rev-parse HEAD > "$BUNDLE/git-head.txt" 2>/dev/null \
@@ -292,17 +308,28 @@ fi
 #     left this machine. "failed" means none of that can be trusted (fail()
 #     already set it). Computed here, once, rather than threading a third
 #     state through every destination check above.
+#
+#     Off-machine is not off-site: vocalassistant is in the same house, so one
+#     fire, flood or burglary takes it and this server together. Only B2
+#     counts as off-site. degraded stays keyed on off-machine alone -- a
+#     second trigger on off_site_copies == 0 would fire every night until B2
+#     is reliable, and an alarm that always fires is one nobody reads.
 # ---------------------------------------------------------------------------
-OFFSITE_COPIES=0
-[[ "$DEST_PI" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
-[[ "$DEST_B2" == "ok" ]] && OFFSITE_COPIES=$((OFFSITE_COPIES + 1))
+OFF_MACHINE_COPIES=0
+OFF_SITE_COPIES=0
+[[ "$DEST_PI" == "ok" ]] && OFF_MACHINE_COPIES=$((OFF_MACHINE_COPIES + 1))
+if [[ "$DEST_B2" == "ok" ]]; then
+    OFF_MACHINE_COPIES=$((OFF_MACHINE_COPIES + 1))
+    OFF_SITE_COPIES=$((OFF_SITE_COPIES + 1))
+fi
 
-if [[ "$RESULT" == "ok" && "$OFFSITE_COPIES" -eq 0 ]]; then
+if [[ "$RESULT" == "ok" && "$OFF_MACHINE_COPIES" -eq 0 ]]; then
     RESULT="degraded"
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Prune — only on a fully successful run, and never below one copy.
+# 9. Prune — local on ok or degraded, vocalassistant only on ok, never on
+#    failed, and never below one copy.
 #    The GFS decision itself lives in prune_backups.py (easier to get right,
 #    and to verify, than inline awk date arithmetic). It is a pure function
 #    of filenames, so the local and vocalassistant legs feed it a listing and
@@ -337,14 +364,24 @@ prune_pi() {
     done <<< "$to_delete"
 }
 
-if [[ "$RESULT" == "ok" ]]; then
+# Local pruning is safe on a degraded run too: tonight produced a verified
+# local copy, so retention has something trustworthy to retain. Skipping it
+# meant a week of deferred retention executing at once on the first ok run
+# (five archives on 2026-10-16), and unbounded growth if the Pi stays down.
+# Remote pruning is not safe on degraded: the destination is by definition in
+# an unknown state.
+#
+# B2 is never pruned, deliberately -- do not add a B2 prune here. The bucket
+# uses object lock so that a compromised server cannot erase backup history;
+# a delete would fail every night and train people to stop reading the
+# status file. Expiry belongs to the bucket's lifecycle rules (console).
+if [[ "$RESULT" == "ok" || "$RESULT" == "degraded" ]]; then
     [[ "$DEST_LOCAL" == "ok" ]] && prune_local "$LOCAL_COPY_DIR"
+fi
+if [[ "$RESULT" == "ok" ]]; then
     [[ "$DEST_PI" == "ok" ]] && prune_pi
-    # B2 retention left to a lifecycle rule on the bucket (section 7 covers
-    # local + vocalassistant; B2 is cold storage and object-count pruning over
-    # rclone's HTTP API is not worth the complexity at 23 files).
 else
-    echo "backup.sh: result=$RESULT — pruning skipped on all destinations" >&2
+    echo "backup.sh: result=$RESULT — remote pruning skipped" >&2
 fi
 
 # ---------------------------------------------------------------------------
@@ -365,7 +402,9 @@ cat > "$TMP_STATUS" <<EOF
   "smoke_test": $( [[ -n "$SMOKE_LINE" ]] && printf '"%s"' "$SMOKE_LINE" || printf 'null' ),
   "git_head": "$GIT_HEAD",
   "encrypted_bytes": $ENCRYPTED_BYTES,
-  "offsite_copies": $OFFSITE_COPIES,
+  "off_machine_copies": $OFF_MACHINE_COPIES,
+  "off_site_copies": $OFF_SITE_COPIES,
+  "roles_included": $ROLES_INCLUDED,
   "destinations": { "local": "$DEST_LOCAL", "vocalassistant": "$DEST_PI", "b2": "$DEST_B2" },
   "error": $ERROR_MSG
 }
@@ -449,7 +488,31 @@ if not existing:
 PYEOF
 fi
 
-echo "backup.sh: result=$RESULT verified=$VERIFIED offsite_copies=$OFFSITE_COPIES local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2"
+# On a fully ok run, close any warning task this script wrote earlier. Without
+# this an open warning task suppresses every new one through the duplicate
+# guard above: task 105 sat open for nine days as a stale alarm silencing the
+# alarm system. Exact titles only -- never anything that merely looks similar.
+if [[ "$RESULT" == "ok" ]]; then
+    PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
+import sys
+sys.path.insert(0, "$PA_PATH")
+from pa import repo
+from pa.db import get_db
+db = get_db()
+open_tasks = db.rows("""select id from pa.task
+                         where title in ('Backup is failing — investigate',
+                                         'Backup has no off-site copy yet')
+                           and status not in ('done','dropped')""")
+for t in open_tasks:
+    repo.task_complete(t["id"],
+        note="Closed automatically by scripts/backup.sh: run $RUN_STARTED "
+             "(git $GIT_HEAD) reached result=ok.",
+        db=db)
+    print(f"backup.sh: closed warning task {t['id']}")
+PYEOF
+fi
+
+echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2"
 
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
