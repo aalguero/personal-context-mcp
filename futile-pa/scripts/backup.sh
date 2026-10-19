@@ -509,6 +509,9 @@ for t in open_tasks:
              "(git $GIT_HEAD) reached result=ok.",
         db=db)
     print(f"backup.sh: closed warning task {t['id']}")
+# Without an explicit close the pool's threads take ~20s to time out at exit,
+# on every ok run.
+db.close()
 PYEOF
 fi
 
