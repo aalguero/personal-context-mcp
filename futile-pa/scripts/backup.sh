@@ -15,11 +15,10 @@
 set -euo pipefail   # a backup script that continues after an error is how
                     # you get empty backups
 
-# age and rclone are installed as user-local static binaries (no root
-# available in this environment at the time this was written -- see the
-# backup report). systemd user units do not inherit ~/.local/bin on PATH,
-# so it has to be added explicitly rather than assumed.
-export PATH="/home/dremon/.local/bin:$PATH"
+# Every tool this script runs comes from /usr/bin (Debian packages). The
+# hand-installed age/rclone/rsync that once lived in ~/.local/bin were retired
+# on 2026-10-10; that prepend is gone too, so nothing dropped there later can
+# silently shadow the packaged binaries.
 
 REPO_ROOT="/home/dremon/tools/personal-context-mcp"
 ENV_FILE="$REPO_ROOT/.env"
@@ -342,9 +341,10 @@ fi
 #
 #     Off-machine is not off-site: vocalassistant is in the same house, so one
 #     fire, flood or burglary takes it and this server together. Only B2
-#     counts as off-site. degraded stays keyed on off-machine alone -- a
-#     second trigger on off_site_copies == 0 would fire every night until B2
-#     is reliable, and an alarm that always fires is one nobody reads.
+#     counts as off-site. degraded stays keyed on off-machine alone, because
+#     degraded also stops remote pruning: a B2 outage must not quietly stop
+#     retention on the Pi. off_site_copies == 0 raises its own alert instead
+#     (no_off_site, in backup_alerts.py), independent of RESULT.
 # ---------------------------------------------------------------------------
 OFF_MACHINE_COPIES=0
 OFF_SITE_COPIES=0
@@ -416,6 +416,85 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9b. Weekly re-check of what already sits on vocalassistant. The transfer is
+#     verified on arrival, but an SD card can corrupt a file months later and
+#     nothing would notice until the day it was needed. The .sha256 files
+#     shipped next to every archive make this nearly free. (B2 needs none of
+#     this: the upload is verified by downloading it back, and the bucket is
+#     immutable.)
+#
+#     Due when the last *completed* check is more than six days old, rather
+#     than on a fixed weekday: a Pi that is down on check night gets retried
+#     the next night instead of a week later. Strictly an audit -- whatever
+#     happens here never changes RESULT or the exit code, and nothing is
+#     deleted. A mismatch raises pi_corruption; unreachable records "skipped".
+# ---------------------------------------------------------------------------
+PI_INTEGRITY="not_run"
+PI_INTEGRITY_FILES=0
+PI_INTEGRITY_OUT="$WORK/pi_integrity.out"
+: > "$PI_INTEGRITY_OUT"
+
+# Runs on the Pi via sh -s, so it must stay POSIX sh. Exit 0 = all match,
+# 1 = mismatch or missing file, 3 = the backup directory itself is gone.
+# Prints "checked N" last, and any failure lines before it.
+pi_integrity_check() {
+    local dir="$1"
+    timeout 300 ssh $PI_SSH_OPTS "$PI_HOST" sh -s -- "$dir" <<'REMOTE'
+cd "$1" 2>/dev/null || { echo "backup directory $1 missing"; exit 3; }
+status=0; n=0
+for f in futile-pa-*.tar.age; do
+    [ -e "$f" ] || continue
+    n=$((n + 1))
+    [ -f "$f.sha256" ] || { echo "$f: no .sha256 file"; status=1; }
+done
+for s in futile-pa-*.tar.age.sha256; do
+    [ -e "$s" ] || continue
+    sha256sum -c --quiet "$s" 2>&1 || status=1
+done
+echo "checked $n"
+exit $status
+REMOTE
+}
+
+PI_INTEGRITY_DUE="$(python3 - "$STATUS_FILE" <<'PYEOF' || echo 1
+import datetime as dt, json, sys
+try:
+    last = json.load(open(sys.argv[1])).get("pi_integrity_checked")
+except (OSError, ValueError):
+    last = None
+if not last:
+    print(1)
+else:
+    age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(last)
+    print(1 if age > dt.timedelta(days=6) else 0)
+PYEOF
+)"
+
+if [[ "$PI_INTEGRITY_DUE" == "1" ]]; then
+    if [[ "$DEST_PI" == "failed" ]]; then
+        # Already failed to reach it tonight; don't spend another timeout.
+        PI_INTEGRITY="skipped"
+    else
+        PI_RC=0
+        pi_integrity_check "$PI_REMOTE_DIR" > "$PI_INTEGRITY_OUT" 2>&1 || PI_RC=$?
+        case "$PI_RC" in
+            0) PI_INTEGRITY="ok" ;;
+            1|3) PI_INTEGRITY="mismatch" ;;
+            *) PI_INTEGRITY="skipped" ;;   # 255 ssh, 124 timeout, anything else
+        esac
+        PI_INTEGRITY_FILES="$(sed -n 's/^checked \([0-9]*\)$/\1/p' "$PI_INTEGRITY_OUT" | tail -1)"
+        PI_INTEGRITY_FILES="${PI_INTEGRITY_FILES:-0}"
+        sed -i '/^checked [0-9]*$/d' "$PI_INTEGRITY_OUT"
+    fi
+    if [[ "$PI_INTEGRITY" == "mismatch" ]]; then
+        echo "backup.sh: vocalassistant integrity check FAILED (nothing deleted):" >&2
+        sed 's/^/backup.sh:   /' "$PI_INTEGRITY_OUT" >&2
+    elif [[ "$PI_INTEGRITY" == "skipped" ]]; then
+        echo "backup.sh: vocalassistant integrity check due but skipped (unreachable); retrying next run" >&2
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 10. Status file, every run.
 # ---------------------------------------------------------------------------
 GIT_HEAD="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -445,126 +524,53 @@ EOF
 # "last run that produced a trustworthy local copy, ok or degraded". Neither
 # goes backwards: a run that didn't reach that bar keeps whatever the
 # previous run already achieved.
-if [[ -f "$STATUS_FILE" ]]; then
-    python3 -c "
-import json
-d = json.load(open('$TMP_STATUS'))
-prev = json.load(open('$STATUS_FILE'))
+#
+# pi_integrity_checked/_files/_detail describe the last *completed* Pi check
+# (ok or mismatch) and are carried forward on every run that doesn't complete
+# one, so they mean "last time we looked", not "tonight". pi_integrity_result
+# is the outcome of the last attempt: ok, mismatch, or skipped (due, but the
+# Pi couldn't be reached).
+python3 - "$TMP_STATUS" "$STATUS_FILE" "$PI_INTEGRITY" "$NOW" \
+    "$PI_INTEGRITY_FILES" "$PI_INTEGRITY_OUT" <<'PYEOF' || true
+import json, os, sys
+tmp, status_file, pi, now, pi_files, pi_out = sys.argv[1:]
+d = json.load(open(tmp))
+prev = json.load(open(status_file)) if os.path.exists(status_file) else {}
 if d['last_success'] is None:
     d['last_success'] = prev.get('last_success')
 if d['last_verified_backup'] is None:
     d['last_verified_backup'] = prev.get('last_verified_backup')
-json.dump(d, open('$TMP_STATUS', 'w'), indent=2)
-" || true
-fi
+for k in ('pi_integrity_checked', 'pi_integrity_result',
+          'pi_integrity_files', 'pi_integrity_detail'):
+    d[k] = prev.get(k)
+if pi == 'skipped':
+    d['pi_integrity_result'] = 'skipped'
+elif pi in ('ok', 'mismatch'):
+    d['pi_integrity_checked'] = now
+    d['pi_integrity_result'] = pi
+    d['pi_integrity_files'] = int(pi_files)
+    d['pi_integrity_detail'] = [l for l in open(pi_out).read().splitlines() if l.strip()]
+json.dump(d, open(tmp, 'w'), indent=2)
+PYEOF
 
 mv "$TMP_STATUS" "$STATUS_FILE"
 chmod 600 "$STATUS_FILE"
 
 # ---------------------------------------------------------------------------
-# On failure or degraded: create a task. Two separate alerts, each guarded
-# independently, so a bad week makes one task per condition, not seven, and
-# the two severities never dedupe against each other.
-#
-# Identity is pa.task.metadata->>'backup_alert' ('failure' | 'no_offsite'),
-# written in the same transaction as the task, and both the duplicate guard
-# and the auto-close below match on it -- never on the title. A title is a
-# label for a human and may be edited freely; matching on it meant that one
-# changed character (the em dash, say) would silently stop the dedupe and
-# the auto-close, with no error anywhere.
+# 11. Raise or close this script's warning tasks: failure, no_off_machine,
+#     no_off_site, pi_corruption. One task per open condition, deduped and
+#     auto-closed on pa.task.metadata->>'backup_alert', never on the title.
+#     The rules live in backup_alerts.py, so a scratch-database test runs the
+#     same code as production. Best-effort: a database problem here must not
+#     turn a good backup into a failed one.
 # ---------------------------------------------------------------------------
-if [[ "$RESULT" == "failed" ]]; then
-    PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
-import sys
-sys.path.insert(0, "$PA_PATH")
-from pa import repo
-from pa.db import get_db
-db = get_db()
-existing = db.row("""select id from pa.task
-                      where metadata->>'backup_alert' = 'failure'
-                        and status not in ('done','dropped')""")
-if not existing:
-    with db.transaction():
-        t = repo.task_add(
-            title="Backup is failing — investigate",
-            project="admin-2026", status="next", importance=5,
-            effort_minutes=30, energy="medium",
-            contexts=["computer", "focus"],
-            notes="Written automatically by scripts/backup.sh. "
-                  "See /home/dremon/.personal-context/backup-status.json for the error. "
-                  "Importance 5: an unnoticed backup failure is the failure mode the "
-                  "whole design exists to prevent.",
-            # "backup.sh" is not in pa.task's source check constraint (manual,
-            # claude, google_tasks, gmail, calendar, recurrence, import -- see
-            # migrations/001_core.sql). Closest existing fit; a dedicated value
-            # belongs to a future schema change, not this brief.
-            source="manual", db=db)
-        # task_add takes no metadata argument; same transaction, so the task
-        # never exists without its marker.
-        db.execute("""update pa.task
-                         set metadata = metadata || jsonb_build_object('backup_alert', 'failure')
-                       where id = %s""", (t["id"],))
-# Without an explicit close the pool's threads take ~20s to time out at exit.
-db.close()
-PYEOF
-fi
+PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" "$PA_PATH/scripts/backup_alerts.py" \
+    --result "$RESULT" --off-site-copies "$OFF_SITE_COPIES" \
+    --pi-integrity "$PI_INTEGRITY" --pi-mismatches="$(cat "$PI_INTEGRITY_OUT")" \
+    --run-started "$RUN_STARTED" --git-head "$GIT_HEAD" \
+    || echo "backup.sh: backup_alerts.py failed — alert tasks not updated" >&2
 
-if [[ "$RESULT" == "degraded" ]]; then
-    PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
-import sys
-sys.path.insert(0, "$PA_PATH")
-from pa import repo
-from pa.db import get_db
-db = get_db()
-existing = db.row("""select id from pa.task
-                      where metadata->>'backup_alert' = 'no_offsite'
-                        and status not in ('done','dropped')""")
-if not existing:
-    with db.transaction():
-        t = repo.task_add(
-            title="Backup has no off-site copy yet",
-            project="admin-2026", status="next", importance=3,
-            effort_minutes=15, energy="low",
-            contexts=["computer"],
-            notes="Written automatically by scripts/backup.sh. A verified, "
-                  "encrypted backup exists locally (see "
-                  "/home/dremon/.personal-context/backup-status.json) but has not "
-                  "reached vocalassistant or B2. Lower importance than the failure task: "
-                  "the backup itself is good, it just isn't off this machine yet.",
-            source="manual", db=db)
-        db.execute("""update pa.task
-                         set metadata = metadata || jsonb_build_object('backup_alert', 'no_offsite')
-                       where id = %s""", (t["id"],))
-db.close()
-PYEOF
-fi
-
-# On a fully ok run, close any warning task this script wrote earlier. Without
-# this an open warning task suppresses every new one through the duplicate
-# guard above: task 105 sat open for nine days as a stale alarm silencing the
-# alarm system. Matches this script's own markers only -- never a title, and
-# never anything that merely looks similar.
-if [[ "$RESULT" == "ok" ]]; then
-    PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
-import sys
-sys.path.insert(0, "$PA_PATH")
-from pa import repo
-from pa.db import get_db
-db = get_db()
-open_tasks = db.rows("""select id from pa.task
-                         where metadata->>'backup_alert' in ('failure', 'no_offsite')
-                           and status not in ('done','dropped')""")
-for t in open_tasks:
-    repo.task_complete(t["id"],
-        note="Closed automatically by scripts/backup.sh: run $RUN_STARTED "
-             "(git $GIT_HEAD) reached result=ok.",
-        db=db)
-    print(f"backup.sh: closed warning task {t['id']}")
-db.close()
-PYEOF
-fi
-
-echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2"
+echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2 pi_integrity=$PI_INTEGRITY"
 
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
