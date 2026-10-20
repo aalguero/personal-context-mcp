@@ -225,6 +225,11 @@ if [[ "$RESULT" == "ok" ]]; then
     fi
 fi
 
+# Every Postgres client call is above this line. Nothing below needs the
+# password in its environment -- age, rsync, ssh and rclone would only
+# inherit it, and the task blocks connect via an explicit PA_DATABASE_URL.
+unset PGPASSWORD
+
 CHECKSUM_FILE=""
 if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
     ENCRYPTED_BYTES="$(stat -c%s "$ENCRYPTED_FILE")"
@@ -277,24 +282,50 @@ if [[ "$RESULT" == "ok" && -n "$ENCRYPTED_FILE" ]]; then
     fi
 
     # -- B2, via rclone -------------------------------------------------
+    # The bucket is object-locked (compliance, 30 days): append-only, and
+    # nothing uploaded can be deleted or overwritten until it expires.
+    #
+    # One copyto per file: `rclone copy` takes exactly one source, and the
+    # two-source form this replaced failed at argument parsing on every run
+    # it ever got. --immutable makes an existing object a loud error rather
+    # than a silent replacement.
+    #
+    # Credentials ride on each rclone command line as per-command env
+    # assignments, never exported, so no other child of this script inherits
+    # them. rclone's stderr goes to a scratch file and is logged with the
+    # bucket name masked, so a usage or API error doesn't put it in the journal.
+    b2_rclone() {
+        RCLONE_CONFIG_B2_TYPE="b2" \
+        RCLONE_CONFIG_B2_ACCOUNT="$PA_BACKUP_B2_KEY_ID" \
+        RCLONE_CONFIG_B2_KEY="$PA_BACKUP_B2_APP_KEY" \
+            rclone "$@" 2>>"$WORK/rclone.log"
+    }
+    b2_log_tail() {
+        local log
+        log="$(tail -n 5 "$WORK/rclone.log" 2>/dev/null || true)"
+        printf '%s' "${log//"$PA_BACKUP_B2_BUCKET"/<bucket>}"
+    }
     if [[ "$RESULT" == "ok" ]]; then
         if [[ "$B2_CONFIGURED" == "1" ]]; then
-            export RCLONE_CONFIG_B2_TYPE="b2"
-            export RCLONE_CONFIG_B2_ACCOUNT="$PA_BACKUP_B2_KEY_ID"
-            export RCLONE_CONFIG_B2_KEY="$PA_BACKUP_B2_APP_KEY"
-            if rclone copy "$ENCRYPTED_FILE" "$CHECKSUM_FILE" \
-                "b2:$PA_BACKUP_B2_BUCKET/futile-pa/" --b2-hard-delete; then
-                REMOTE_B2_SIZE="$(rclone size "b2:$PA_BACKUP_B2_BUCKET/futile-pa/$BASENAME" \
-                    --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["bytes"])' 2>/dev/null || true)"
-                if [[ "$REMOTE_B2_SIZE" == "$ENCRYPTED_BYTES" ]]; then
+            B2_DIR="b2:$PA_BACKUP_B2_BUCKET/futile-pa"
+            if b2_rclone copyto --immutable "$ENCRYPTED_FILE" "$B2_DIR/$BASENAME" \
+                && b2_rclone copyto --immutable "$CHECKSUM_FILE" "$B2_DIR/$BASENAME.sha256"; then
+                # Verify by content, not size: two archives of the same length
+                # are the likely case at a stable dump size, not a coincidence.
+                # --download hashes the bytes B2 actually serves back, end to
+                # end, against the sha256 computed here before upload.
+                LOCAL_SHA="$(cut -d' ' -f1 "$CHECKSUM_FILE")"
+                REMOTE_SHA="$(b2_rclone hashsum sha256 --download "$B2_DIR/$BASENAME" \
+                    | cut -d' ' -f1 || true)"
+                if [[ -n "$REMOTE_SHA" && "$REMOTE_SHA" == "$LOCAL_SHA" ]]; then
                     DEST_B2="ok"
                 else
                     DEST_B2="failed"
-                    dest_error "B2 copy size mismatch (local $ENCRYPTED_BYTES, remote ${REMOTE_B2_SIZE:-unreachable})"
+                    dest_error "B2 copy sha256 mismatch (local $LOCAL_SHA, remote ${REMOTE_SHA:-unreadable}) $(b2_log_tail)"
                 fi
             else
                 DEST_B2="failed"
-                dest_error "rclone copy to B2 failed"
+                dest_error "rclone upload to B2 failed: $(b2_log_tail)"
             fi
         else
             DEST_B2="skipped (not configured)"
@@ -431,9 +462,16 @@ mv "$TMP_STATUS" "$STATUS_FILE"
 chmod 600 "$STATUS_FILE"
 
 # ---------------------------------------------------------------------------
-# On failure or degraded: create a task. Two separate titles, each guarded
+# On failure or degraded: create a task. Two separate alerts, each guarded
 # independently, so a bad week makes one task per condition, not seven, and
 # the two severities never dedupe against each other.
+#
+# Identity is pa.task.metadata->>'backup_alert' ('failure' | 'no_offsite'),
+# written in the same transaction as the task, and both the duplicate guard
+# and the auto-close below match on it -- never on the title. A title is a
+# label for a human and may be edited freely; matching on it meant that one
+# changed character (the em dash, say) would silently stop the dedupe and
+# the auto-close, with no error anywhere.
 # ---------------------------------------------------------------------------
 if [[ "$RESULT" == "failed" ]]; then
     PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
@@ -443,23 +481,31 @@ from pa import repo
 from pa.db import get_db
 db = get_db()
 existing = db.row("""select id from pa.task
-                      where title = 'Backup is failing — investigate'
+                      where metadata->>'backup_alert' = 'failure'
                         and status not in ('done','dropped')""")
 if not existing:
-    repo.task_add(
-        title="Backup is failing — investigate",
-        project="admin-2026", status="next", importance=5,
-        effort_minutes=30, energy="medium",
-        contexts=["computer", "focus"],
-        notes="Written automatically by scripts/backup.sh. "
-              "See /home/dremon/.personal-context/backup-status.json for the error. "
-              "Importance 5: an unnoticed backup failure is the failure mode the "
-              "whole design exists to prevent.",
-        # "backup.sh" is not in pa.task's source check constraint (manual,
-        # claude, google_tasks, gmail, calendar, recurrence, import -- see
-        # migrations/001_core.sql). Closest existing fit; a dedicated value
-        # belongs to a future schema change, not this brief.
-        source="manual", db=db)
+    with db.transaction():
+        t = repo.task_add(
+            title="Backup is failing — investigate",
+            project="admin-2026", status="next", importance=5,
+            effort_minutes=30, energy="medium",
+            contexts=["computer", "focus"],
+            notes="Written automatically by scripts/backup.sh. "
+                  "See /home/dremon/.personal-context/backup-status.json for the error. "
+                  "Importance 5: an unnoticed backup failure is the failure mode the "
+                  "whole design exists to prevent.",
+            # "backup.sh" is not in pa.task's source check constraint (manual,
+            # claude, google_tasks, gmail, calendar, recurrence, import -- see
+            # migrations/001_core.sql). Closest existing fit; a dedicated value
+            # belongs to a future schema change, not this brief.
+            source="manual", db=db)
+        # task_add takes no metadata argument; same transaction, so the task
+        # never exists without its marker.
+        db.execute("""update pa.task
+                         set metadata = metadata || jsonb_build_object('backup_alert', 'failure')
+                       where id = %s""", (t["id"],))
+# Without an explicit close the pool's threads take ~20s to time out at exit.
+db.close()
 PYEOF
 fi
 
@@ -471,27 +517,33 @@ from pa import repo
 from pa.db import get_db
 db = get_db()
 existing = db.row("""select id from pa.task
-                      where title = 'Backup has no off-site copy yet'
+                      where metadata->>'backup_alert' = 'no_offsite'
                         and status not in ('done','dropped')""")
 if not existing:
-    repo.task_add(
-        title="Backup has no off-site copy yet",
-        project="admin-2026", status="next", importance=3,
-        effort_minutes=15, energy="low",
-        contexts=["computer"],
-        notes="Written automatically by scripts/backup.sh. A verified, "
-              "encrypted backup exists locally (see "
-              "/home/dremon/.personal-context/backup-status.json) but has not "
-              "reached vocalassistant or B2. Lower importance than the failure task: "
-              "the backup itself is good, it just isn't off this machine yet.",
-        source="manual", db=db)
+    with db.transaction():
+        t = repo.task_add(
+            title="Backup has no off-site copy yet",
+            project="admin-2026", status="next", importance=3,
+            effort_minutes=15, energy="low",
+            contexts=["computer"],
+            notes="Written automatically by scripts/backup.sh. A verified, "
+                  "encrypted backup exists locally (see "
+                  "/home/dremon/.personal-context/backup-status.json) but has not "
+                  "reached vocalassistant or B2. Lower importance than the failure task: "
+                  "the backup itself is good, it just isn't off this machine yet.",
+            source="manual", db=db)
+        db.execute("""update pa.task
+                         set metadata = metadata || jsonb_build_object('backup_alert', 'no_offsite')
+                       where id = %s""", (t["id"],))
+db.close()
 PYEOF
 fi
 
 # On a fully ok run, close any warning task this script wrote earlier. Without
 # this an open warning task suppresses every new one through the duplicate
 # guard above: task 105 sat open for nine days as a stale alarm silencing the
-# alarm system. Exact titles only -- never anything that merely looks similar.
+# alarm system. Matches this script's own markers only -- never a title, and
+# never anything that merely looks similar.
 if [[ "$RESULT" == "ok" ]]; then
     PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" - <<PYEOF || true
 import sys
@@ -500,8 +552,7 @@ from pa import repo
 from pa.db import get_db
 db = get_db()
 open_tasks = db.rows("""select id from pa.task
-                         where title in ('Backup is failing — investigate',
-                                         'Backup has no off-site copy yet')
+                         where metadata->>'backup_alert' in ('failure', 'no_offsite')
                            and status not in ('done','dropped')""")
 for t in open_tasks:
     repo.task_complete(t["id"],
@@ -509,8 +560,6 @@ for t in open_tasks:
              "(git $GIT_HEAD) reached result=ok.",
         db=db)
     print(f"backup.sh: closed warning task {t['id']}")
-# Without an explicit close the pool's threads take ~20s to time out at exit,
-# on every ok run.
 db.close()
 PYEOF
 fi
