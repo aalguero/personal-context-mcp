@@ -1,18 +1,14 @@
 # The task check-in agent
 
-**Status: live since 2026-10-26. First run succeeded.**
-**Planned to be retired and recreated in Andre's code project — see §11.**
+**Status: live since 2026-10-26. Migrated to the code project 2026-10-26/27 — see §11.**
 
-> **Which copy is authoritative.** Right now: the project doc
-> `claude/task-agent-brief.md` in the "Personal Assistant" Claude project. That is the
-> copy the running agent reads at the start of every run. **This file is an export.**
-> If the two diverge, the project copy is what the agent is actually doing.
->
-> **This inverts at migration.** Once the agent is recreated in the code project (§11,
-> task 181), this file becomes the master and the project copy becomes the export —
-> because by then the agent will be reading from the repo.
->
-> Exported 2026-10-27, after the first run.
+> **Which copy is authoritative.** This file, `docs/claude/task-agent-brief.md` in
+> `~/developer/futile-pa`. The running agent is the local scheduled task `task-checkin`
+> (`/home/andre/.claude/scheduled-tasks/task-checkin/SKILL.md`), which reads this file
+> directly off disk at the start of every run. The old copy in the claude.ai "Personal
+> Assistant" Project is now the export, not the master, and the Project's own scheduled
+> trigger (`trig_01LP3NydyjH9kb7VsfbjsLXY`) was disabled the night of 2026-10-27 — kept,
+> not deleted, so its run history survives. Migration completed per §11.
 
 This document is the agent's operating instructions — it reads this file at the start
 of every run, so editing this document changes the agent's behaviour. Do not edit it
@@ -67,8 +63,10 @@ ever talk to itself.
 
 ## 3. What it does on each run
 
-1. **Read this document** — `project_read` on `claude/task-agent-brief.md`.
-   *(In the code-project version this becomes a file read from the repo — see §11.)*
+1. **Read this document** — a file read of
+   `/home/andre/developer/futile-pa/docs/claude/task-agent-brief.md`. (Before the
+   2026-10-26/27 migration this was `project_read` on the claude.ai Project copy — see
+   §11 for the history.)
 2. **Read its own state.** `get_context` category `task_agent`: last run, last reply
    from Andre, questions already asked and still unanswered, and the consecutive
    unanswered-run count.
@@ -277,56 +275,59 @@ five-question limit were set right.
 full of staleness*. It may well be too many on a quiet Tuesday. The number to watch is
 not how many get answered but whether he starts skipping the push entirely.
 
-## 11. Handover to the code project
+## 11. Handover to the code project — DONE
 
 Andre, 2026-10-27: *"I am going to recreate this agent in the code project I am setting
 up, we will shut down the one in this project when that happens."* **Tracked as task
-181.** No date — it fires when his code project is ready.
+181, closed 2026-10-27.**
 
-**The two must not overlap.** Two check-in agents against the same database is worse
-than either alone: they would ask the same questions hours apart, both write answers
-back, and both compete for the same `task_agent` keys — so `asked_recently` and
-`unanswered_runs` would be overwritten by whichever ran last, and the 24-hour no-repeat
-rule would stop working for both. The predictable result is that he mutes the pair,
-which costs more than never having built either. **Make it a swap on one day, not a
-trial period with both live.**
+**What actually happened, in order:**
+- **2026-10-26 22:26** — the local scheduled task `task-checkin` was created
+  (`/home/andre/.claude/scheduled-tasks/task-checkin/SKILL.md`), reading this file
+  directly off disk rather than via `project_read`. Both agents were live at this point.
+- **2026-10-27, three runs** (~11:05, ~15:48, ~19:14 Eastern) — the new local agent ran
+  on schedule, asked closed questions, and wrote real completions/defers/creates
+  (visible in `pa_activity` and the `task_agent` context key). One self-noted deviation:
+  it asked 3 questions per run instead of the spec's 5 — flagged as a review item for
+  Andre, not changed unilaterally.
+- **2026-10-27, night** — Andre disabled `trig_01LP3NydyjH9kb7VsfbjsLXY` in the claude.ai
+  Project (not deleted, so its run history from 10-26 survives). The overlap window
+  between the two live agents ran from 10-26 22:26 to this point; nothing in the
+  `task_agent` context or `pa_activity` shows signs of conflicting writes during it.
 
-**Shutting this one down:** `update_trigger` with `enabled=false` on
-`trig_01LP3NydyjH9kb7VsfbjsLXY`. That keeps the run history, which is the only evidence
-on whether four-a-day and five-questions were right, and it is reversible in one call.
-`delete_trigger` only after the replacement has been proven over several days — deleting
-a trigger also deletes every session it started, and the history goes with it.
+**The two must not overlap — the rule that governed the swap.** Two check-in agents
+against the same database would be worse than either alone: same questions hours apart,
+both writing answers back, both competing for the same `task_agent` keys, so
+`asked_recently` and `unanswered_runs` would be overwritten by whichever ran last and
+the 24-hour no-repeat rule would stop working for both. There was a real overlap window
+(10-26 22:26 to 10-27 night, both agents technically live), closed by Andre disabling
+the old trigger rather than run a trial period with both active. Checked afterward: no
+sign of conflicting writes in `task_agent` or `pa_activity` from that window.
 
-**What the replacement inherits:**
-- **The same context-store category, `task_agent`,** with the same keys and meanings.
-  Then `asked_recently` carries across and the new agent does not open by re-asking
-  everything yesterday's agent asked. A fresh category would make day one look like a
-  malfunction.
-- **This document as the spec.** This file is already in `~/developer/futile-pa/`.
-  Once it is in the repo, version control is a better home than a project doc — **and
-  the authority inverts: this copy becomes the master and the project copy becomes the
-  export.**
+**What the replacement inherited, confirmed working:**
+- **The same context-store category, `task_agent`,** same keys and meanings —
+  `asked_recently` carried across, so the new agent did not re-ask everything the old
+  one had already asked.
+- **This document as the spec**, now read directly from the repo rather than via
+  `project_read` — the §3 step-1 edit this section used to call for is done (see §3).
+  **The authority has inverted:** this file is the master; the claude.ai Project copy
+  is the export.
 
-**One edit is required when it moves.** §3 step 1 says `project_read` on
-`claude/task-agent-brief.md`. In a code project that path does not exist; it becomes a
-file read from the repo. If that line is not changed, the agent begins every run by
-failing to find its own instructions — and may proceed without them. **Change it in the
-same commit that stands the agent up.**
+**What did not move automatically:** auto-approval and push notifications are
+properties of the scheduled task, not of this document — the local `task-checkin`
+entry has both set.
 
-**What does not move with it:** auto-approval and push notifications are properties of
-the scheduled task, not of this document. Whatever creates the replacement must set them
-again. An agent that stalls on an approval prompt at 7:48am does nothing at all.
-
-**The §8 gap moves with it too.** Task 182 should be built against the context-store key
-rather than against this particular trigger, so that it keeps working across the
-handover without modification.
+**The §8 gap carries over as designed.** Task 182 (nothing watches whether the agent is
+alive) should still be built against the context-store key (`task_agent.last_run_at`)
+rather than against either specific trigger, so it keeps working regardless of which
+scheduler is running the agent.
 
 ## 12. Open items
 
 | # | What | Where |
 |---|---|---|
 | **182** | Nothing watches whether this agent is alive. `task_agent.last_run_at` is written and never read. | Build · importance 4 |
-| **181** | Retire this agent when its replacement goes live in the code project. Swap, do not overlap. | Build · importance 3 |
+| **181** | ~~Retire this agent when its replacement goes live in the code project.~~ **Closed 2026-10-27** — see §11. | Build · importance 3 — done |
 | **183** | `pa_task_update` has no `depends_on`, so the 80 → 15 estate chain is prose only and task 15 never reports blocked. | Build · importance 2 |
 | **162** item 8 | `pa_task_update` silently ignores `contexts`. Task 17 still carries `@phone` and a 30-minute effort from when it was a phone task. | Operations · importance 4 |
 | **179** | The Papa visit still has no specific day inside the 2–13 Nov window. The agent is holding this one open; it needs a conversation, not a tool call. | open question |

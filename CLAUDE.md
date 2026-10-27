@@ -1,10 +1,13 @@
 # futileMCP / futile-pa — orientation for Claude Code
 
-> **Updated 2026-10-27.** What changed since the 10-26 version: the server's unpushed
-> commits **are now on GitHub**, and this clone is current with them — the warning that
-> used to be in this file is resolved and has been replaced with the facts. The
-> scheduled check-in agent is **live**. The second clone in `~/developer/tmp` turned out
-> to be far staler than this file claimed. Three new build tasks exist (181, 182, 183).
+> **Updated 2026-10-27, evening.** What changed since the 10-26 version: the server's
+> unpushed commits **are now on GitHub**, and this clone is current with them — the
+> warning that used to be in this file is resolved and has been replaced with the
+> facts. The second clone in `~/developer/tmp` turned out to be far staler than this
+> file claimed. Three new build tasks exist (181, 182, 183) — **181 is now closed**:
+> the check-in agent has been recreated as a local scheduled task reading this repo,
+> and the old claude.ai Project trigger is disabled. This file itself was committed to
+> git for the first time this evening, along with `docs/`.
 
 You are running on **shadow**, Andre's own computer (tailnet DNS name `darkslip`,
 `100.102.50.58`; OS user `andre`). The system you are helping build runs somewhere
@@ -49,7 +52,7 @@ artefact, not a second entity. **Ignore it.** Everything happens in
 |---|---|
 | futileMCP server | Live on futileassistant behind Tailscale Funnel, 29 tools, shared-secret auth that returns **404**, never 401 |
 | Backups | Proven end to end including a real restore (10-19): verified dumps, age encryption the server cannot reverse, off-machine on the Pi, compliance-locked off-site in B2, four alert kinds keyed on `metadata->>'backup_alert'` |
-| **Task check-in agent** | **Live.** Scheduled task `trig_01LP3NydyjH9kb7VsfbjsLXY`, four runs a day (7:48am / 11:48am / 3:48pm / 7:48pm Eastern), cloud-only, auto-approval, push notifications. Spec: `docs/claude/task-agent-brief.md`. **Its rules bind that agent — don't break what it relies on** |
+| **Task check-in agent** | **Live, in this repo now — task 181 closed 2026-10-27.** Local scheduled task `task-checkin` (`~/.claude/scheduled-tasks/task-checkin/SKILL.md`), same four-runs-a-day schedule, reads `docs/claude/task-agent-brief.md` off disk. The old claude.ai Project trigger (`trig_01LP3NydyjH9kb7VsfbjsLXY`) is disabled, not deleted — history kept. **Its rules bind that agent — don't break what it relies on** |
 | Recurrence engine | Ten series exist; nothing runs it on a timer (task 161). Recurrences 1 and 9 collide every Monday and cannot be fixed without SQL |
 
 ## Things on shadow you must not touch
@@ -217,14 +220,11 @@ below are pointers, not a substitute.
 
 **Build — in `Learning & AI / Personal Assistant Build`:**
 
-- **181 — Recreate the check-in agent here, then retire the one in the Project.**
-  This is the handoff. §11 of `docs/claude/task-agent-brief.md` has the detail. Three
-  things matter: the two agents **must not overlap** (same day swap, not a trial
-  period); keep the context-store category `task_agent` so `asked_recently` carries
-  across; and **§3 step 1 of the brief says `project_read` on a Project path that does
-  not exist here — it becomes a file read from this repo.** Change that line in the
-  same commit that stands the agent up, or it begins every run unable to find its own
-  instructions.
+- **181 — DONE 2026-10-27.** The check-in agent is recreated here (local scheduled
+  task `task-checkin`, reading `docs/claude/task-agent-brief.md` off disk) and the
+  Project trigger is disabled. §11 of the brief has the full record, including the
+  confirmed-harmless overlap window between creation (10-26 22:26) and the disable
+  (10-27 night).
 - **182 — Nothing watches whether the agent is alive.** It writes
   `task_agent.last_run_at` every run and nothing reads it. Put the check in
   `pa_daily_brief`, not a second timer — a second timer is one more thing that can die
