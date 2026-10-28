@@ -141,7 +141,13 @@ def main() -> int:
                 # "backup.sh" is not in pa.task's source check constraint (manual,
                 # claude, google_tasks, gmail, calendar, recurrence, import -- see
                 # migrations/001_core.sql). Closest existing fit.
-                t = repo.task_add(project="admin-2026", status="next",
+                #
+                # project=37 (Personal Assistant Operations), not "admin-2026"
+                # (Household Admin 2026): the working agreement (2026-10-23)
+                # moved script-written alerts there specifically because
+                # Household Admin is where task 156 sat invisible for two
+                # days. Numeric id, not a slug -- the project has none set.
+                t = repo.task_add(project=37, status="next",
                                   source="manual", db=db, **spec)
                 # task_add takes no metadata argument; same transaction, so the
                 # task never exists without its marker.

@@ -8,6 +8,7 @@ ran from Claude Desktop or the claude.ai Project before it.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import agent_loop, notify, toolset
@@ -15,6 +16,14 @@ from . import agent_loop, notify, toolset
 BRIEF_PATH = Path(__file__).resolve().parents[2] / "docs" / "claude" / "task-agent-brief.md"
 
 log = logging.getLogger("futile-assistant.checkin")
+
+# Separate from the brief's own task_agent.last_run_at, which is free-form
+# prose written by the model (e.g. "2026-10-27T19:50:00-04:00 — the real
+# 19:48 run. IMPORTANT CORRECTION..."). watchdog.py needs a timestamp it can
+# parse without guessing at prose formatting, so this writes a second,
+# machine-only field — set on successful completion, not on a run that
+# raised, since a repeatedly-failing run should read as stale.
+WATCHDOG_CATEGORY = "task_agent_watchdog"
 
 RUN_PROMPT = (
     "Run your scheduled check-in now. Follow the brief exactly: read your own "
@@ -62,6 +71,12 @@ def run_once() -> str:
 
     if reply.strip() and not suppressed:
         notify.send(reply)
+
+    toolset.dispatch("set_context", {
+        "category": WATCHDOG_CATEGORY,
+        "key": "last_run_at",
+        "value": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
     return reply
 
 

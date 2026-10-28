@@ -6,6 +6,7 @@ deployed mode — see systemd/futile-assistant.service).
 For manual verification before Signal exists (Phase 2):
     python -m assistant.main checkin-once      # run one check-in cycle now
     python -m assistant.main ask "..."         # one on-demand exchange
+    python -m assistant.main watchdog-once     # run the two staleness checks now
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from pa.db import get_db
 
-from . import checkin, quickask
+from . import checkin, quickask, watchdog
 
 # CRON_TZ=America/New_York 48 7,11,15,19 * * * from task-agent-brief.md,
 # reimplemented directly rather than via a cron-string parser — four fixed
@@ -51,6 +52,13 @@ def run_scheduler() -> None:
                 checkin.run_once()
             except Exception:
                 log.exception("Check-in run failed")
+            # Runs regardless of whether checkin.run_once() raised above —
+            # a check-in that fails every cycle should read as stale via the
+            # watchdog too, not just leave a trail of exceptions in the log.
+            try:
+                watchdog.run_checks()
+            except Exception:
+                log.exception("Watchdog checks failed")
         time.sleep(POLL_SECONDS)
 
 
@@ -75,6 +83,12 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "checkin-once":
         try:
             print(checkin.run_once())
+        finally:
+            get_db().close()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "watchdog-once":
+        try:
+            watchdog.run_checks()
         finally:
             get_db().close()
         return
