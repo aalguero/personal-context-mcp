@@ -18,18 +18,26 @@ RUN_PROMPT = (
     "state, reconcile against the live data, decide whether anything is worth "
     "asking, ask at most five questions if so, write back whatever the answers "
     "establish, and report only what you actually wrote. Silence is a valid "
-    "and good outcome if nothing is stale."
+    "and good outcome if nothing is stale. If there is nothing to report, your "
+    "reply's first line must be exactly \"Nothing to record.\" and nothing "
+    "else needs to follow it — the reasoning that led there belongs in your "
+    "own thinking, not in the reply text."
 )
 
 
 def run_once() -> str:
     """Run one check-in cycle and return the agent's report text.
 
-    Sends to notify.send() unless the reply is the brief's own §6 contract
-    phrase for "I had nothing to do" — found by the first real deploy: once
-    Phase 2 wires send() to Signal, forwarding "nothing to record" verbatim
-    would mean up to four pointless pushes a day, defeating the brief's own
-    "silence is a valid and good outcome" rule (§3 step 4, §4).
+    Sends to notify.send() unless the reply's first line is the brief's own
+    §6 contract phrase for "I had nothing to do".
+
+    First deploy found this needs two layers, not one: the original fix
+    required the *entire* reply to equal "nothing to record" verbatim, but a
+    real run opened with that line and then added several paragraphs of
+    reasoning — still a no-op outcome, just not a bare match. RUN_PROMPT above
+    now asks for brevity explicitly; _is_nothing_to_record checks only the
+    first line regardless, since a model instruction is a strong hint, not a
+    guarantee.
     """
     brief = BRIEF_PATH.read_text(encoding="utf-8")
     system_prompt = (
@@ -45,8 +53,12 @@ def run_once() -> str:
 
 
 def _is_nothing_to_record(reply: str) -> bool:
-    """Matches the brief's §6 contract text exactly, not a fuzzy read of the
-    prose — the brief instructs 'say nothing to record and stop', so this
-    checks for that phrase rather than guessing at what "no news" sounds like.
+    """True if the reply's first non-empty line is the brief's §6 contract
+    phrase, regardless of what follows — matching only the whole reply missed
+    a real case where the model added reasoning after that line.
     """
-    return reply.strip().rstrip(".").lower() == "nothing to record"
+    for line in reply.strip().splitlines():
+        line = line.strip()
+        if line:
+            return line.rstrip(".").lower() == "nothing to record"
+    return True  # an empty reply is also nothing to report

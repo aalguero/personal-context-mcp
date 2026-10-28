@@ -60,14 +60,23 @@ def main() -> None:
     # running, and the interpreter waits ~20s (4 workers x 5s) trying to stop
     # them on exit. The long-running scheduler never reaches this, since it
     # runs forever and the pool should stay open for its whole lifetime.
+    #
+    # try/finally, not a bare call after print(): the second deploy caught
+    # that the original version only closed on the success path — an
+    # exception from ask()/run_once() would skip close() and bring the ~20s
+    # hang right back on exactly the runs most worth seeing finish promptly.
     if len(sys.argv) >= 2 and sys.argv[1] == "ask":
         message = " ".join(sys.argv[2:]) or input("Ask> ")
-        print(quickask.ask(message))
-        get_db().close()
+        try:
+            print(quickask.ask(message))
+        finally:
+            get_db().close()
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "checkin-once":
-        print(checkin.run_once())
-        get_db().close()
+        try:
+            print(checkin.run_once())
+        finally:
+            get_db().close()
         return
     run_scheduler()
 
