@@ -1,0 +1,20 @@
+# Install at ~/.config/systemd/user/futile-assistant.service on futileassistant
+# (systemd --user unit for dremon, same pattern as personal-context-mcp.service).
+#
+# WorkingDirectory is the futile-pa/ subdirectory, not the repo root — that is
+# what puts `assistant/` at the top of sys.path so `-m assistant.main`
+# resolves without a separate PYTHONPATH entry. The assistant package's own
+# __init__.py handles .env and FUTILE_PA_PATH from there.
+[Unit]
+Description=Futile personal assistant — standalone backend (check-in + on-demand)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dremon/tools/personal-context-mcp/futile-pa
+ExecStart=/home/dremon/tools/personal-context-mcp/.venv-new/bin/python -m assistant.main
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

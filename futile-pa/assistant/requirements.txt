@@ -1,0 +1,4 @@
+# Additional dependency for the standalone assistant backend, on top of
+# futile-pa/requirements.txt (psycopg, psycopg_pool, python-dateutil), which
+# this package also needs — it imports pa.tools/pa.db directly.
+anthropic>=0.40
