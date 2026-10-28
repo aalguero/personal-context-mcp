@@ -7,11 +7,14 @@ ran from Claude Desktop or the claude.ai Project before it.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from . import agent_loop, notify, toolset
 
 BRIEF_PATH = Path(__file__).resolve().parents[2] / "docs" / "claude" / "task-agent-brief.md"
+
+log = logging.getLogger("futile-assistant.checkin")
 
 RUN_PROMPT = (
     "Run your scheduled check-in now. Follow the brief exactly: read your own "
@@ -47,7 +50,17 @@ def run_once() -> str:
         f"{brief}"
     )
     reply = agent_loop.run(system_prompt, RUN_PROMPT, toolset.ALL_TOOLS, toolset.dispatch)
-    if reply.strip() and not _is_nothing_to_record(reply):
+
+    # Logged unconditionally, not just on the notify path — the fix-2 deploy
+    # found a real gap: a quiet run leaves no evidence of whether it genuinely
+    # decided there was nothing to do, or produced something that got dropped
+    # before reaching the log. This line is the positive control either way.
+    suppressed = _is_nothing_to_record(reply)
+    log.info("Check-in complete — %s",
+              "suppressed (nothing to record)" if suppressed else "produced output, sending to notify")
+    log.info("Check-in reply in full:\n%s", reply)
+
+    if reply.strip() and not suppressed:
         notify.send(reply)
     return reply
 
