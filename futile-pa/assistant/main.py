@@ -15,6 +15,8 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from pa.db import get_db
+
 from . import checkin, quickask
 
 # CRON_TZ=America/New_York 48 7,11,15,19 * * * from task-agent-brief.md,
@@ -34,7 +36,7 @@ def _due(now: datetime) -> bool:
 
 def run_scheduler() -> None:
     log.info("Scheduler starting — fires daily at %s America/New_York",
-              sorted(f"{h}:{m:02d}" for h, m in FIRE_MINUTE_BY_HOUR.items()))
+              [f"{h:02d}:{m:02d}" for h, m in sorted(FIRE_MINUTE_BY_HOUR.items())])
     # Tracks the (y, m, d, h, min) of the last fire so a 30s poll tick cannot
     # fire the same minute twice, without needing a separate "already ran
     # today" flag that would need its own reset-at-midnight logic.
@@ -53,12 +55,19 @@ def run_scheduler() -> None:
 
 
 def main() -> None:
+    # The one-shot commands below close the DB pool before exiting — found by
+    # the first real deploy: an unclosed pool leaves background threads
+    # running, and the interpreter waits ~20s (4 workers x 5s) trying to stop
+    # them on exit. The long-running scheduler never reaches this, since it
+    # runs forever and the pool should stay open for its whole lifetime.
     if len(sys.argv) >= 2 and sys.argv[1] == "ask":
         message = " ".join(sys.argv[2:]) or input("Ask> ")
         print(quickask.ask(message))
+        get_db().close()
         return
     if len(sys.argv) >= 2 and sys.argv[1] == "checkin-once":
         print(checkin.run_once())
+        get_db().close()
         return
     run_scheduler()
 

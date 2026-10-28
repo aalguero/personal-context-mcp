@@ -1,4 +1,9 @@
 # Additional dependency for the standalone assistant backend, on top of
 # futile-pa/requirements.txt (psycopg, psycopg_pool, python-dateutil), which
 # this package also needs — it imports pa.tools/pa.db directly.
-anthropic>=0.40
+#
+# Hard-pinned, the same reasoning as mcp==1.27.0 in requirements-server.txt:
+# unpinned, this would have resolved to whatever is newest at install time
+# with no record of what was actually verified. 2.3.0 is the version the
+# first real deploy ran against (2026-10-27).
+anthropic==2.3.0
