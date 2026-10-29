@@ -62,12 +62,13 @@ TZ = ZoneInfo("America/New_York")
 
 ALERTS = {
     "backup_stale": dict(
-        title="Backup hasn't run in over a day — check the timer on futileassistant",
+        title="No backup has succeeded in over a day — check futileassistant",
         importance=4, effort_minutes=15, energy="low", contexts=["computer"],
-        notes="Written automatically by assistant/watchdog.py. backup.sh's own "
-              "alerts cover every way a *running* backup can fail, but nothing "
-              "previously noticed a backup that stopped running at all (task 124). "
-              f"See {BACKUP_STATUS_FILE} for the last known attempt.",
+        notes="Written automatically by assistant/watchdog.py, keyed on "
+              "last_success (not last_attempt — see the 2026-10-28 incident, "
+              "where the timer attempted and failed every night for eight "
+              "nights and a last_attempt-based check never noticed). "
+              f"See {BACKUP_STATUS_FILE} for the current result and error.",
     ),
     "checkin_stale": dict(
         title="The task check-in agent hasn't completed a run in hours — check futile-assistant.service",
@@ -95,13 +96,26 @@ def run_checks() -> None:
 
 
 def _check_backup() -> None:
+    """Keys on last_success, not last_attempt.
+
+    The backup-failure diagnosis (2026-10-28) found the bug this field choice
+    caused directly: backup.sh had attempted and failed every night for eight
+    nights (its verification gate correctly refusing to ship an unverified
+    copy), and this check kept reporting "fresh" the entire time because
+    last_attempt updates on a failed run too. last_success is also strictly
+    more informative than checking both fields separately: if the timer stops
+    firing entirely (task 124's original framing), last_success goes stale by
+    exactly the same mechanism as if it fires nightly but keeps failing (what
+    actually happened) — one field covers both failure shapes.
+    """
     now = datetime.now(timezone.utc)
     try:
         status = json.loads(BACKUP_STATUS_FILE.read_text(encoding="utf-8"))
-        last_attempt = datetime.fromisoformat(status["last_attempt"])
-        age_hours = (now - last_attempt).total_seconds() / 3600
+        last_success = datetime.fromisoformat(status["last_success"])
+        age_hours = (now - last_success).total_seconds() / 3600
         stale = age_hours > BACKUP_STALE_AFTER_HOURS
-        detail = f"last attempt {status['last_attempt']}, {age_hours:.1f}h ago"
+        detail = (f"last success {status['last_success']}, {age_hours:.1f}h ago "
+                  f"(last attempt {status.get('last_attempt', 'unknown')}, result={status.get('result', 'unknown')})")
     except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
         # Missing or unreadable is itself worth a human looking at — it's the
         # same actionable signal as genuine staleness, from the backlog's

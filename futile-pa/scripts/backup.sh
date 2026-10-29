@@ -167,7 +167,15 @@ if [[ "$RESULT" == "ok" ]]; then
         VERIFIED="true"
     else
         SMOKE_LINE="$(grep -E '[0-9]+ passed' "$SMOKE_OUT" | head -1 || true)"
-        fail "smoke test failed against restored dump: ${SMOKE_LINE:-see smoke.log}"
+        # The 2026-10-28 incident took a scratch restore and a week to
+        # diagnose because only the summary line ("N passed, M failed")
+        # reached the status file -- the actual failing check's name and
+        # detail were in smoke.log, which the EXIT trap deletes with $WORK.
+        # Pulling the FAIL lines into the error message is the fix: they
+        # survive into the status file and the journal, where a human
+        # (or the watchdog's alert notes) can see them without a restore.
+        FAIL_LINES="$(grep -E '^\s*FAIL\s' "$SMOKE_OUT" | head -5 || true)"
+        fail "smoke test failed against restored dump: ${SMOKE_LINE:-see smoke.log}${FAIL_LINES:+ | ${FAIL_LINES}}"
     fi
 fi
 

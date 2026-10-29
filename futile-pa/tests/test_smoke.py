@@ -127,6 +127,16 @@ mercer = repo.task_add("Read the Mercer advisory agreement, mark up the custody 
                        project="wealth-transition", effort_minutes=90, energy="high",
                        contexts=["computer", "focus"], importance=5, due_on=D(5),
                        hard_deadline=True)
+# Same importance/date/effort as Mercer, soft deadline — exists only to be
+# compared against it directly. The backup-failure diagnosis (2026-10-28)
+# found the check below was comparing Mercer's rank against the *whole*
+# database instead of against a same-distance soft fixture, so it silently
+# started failing as Andre's real backlog grew past it, which in turn failed
+# every nightly backup's verification gate for eight days running.
+mercer_soft_twin = repo.task_add("Soft-deadline scoring comparison fixture",
+                                 project="wealth-transition", effort_minutes=90, energy="high",
+                                 contexts=["computer", "focus"], importance=5, due_on=D(5),
+                                 hard_deadline=False)
 repo.task_add("Ask sister to confirm she'll consent to the custodian change",
               project="wealth-transition", effort_minutes=15, energy="low",
               contexts=["phone"], importance=5, person="sister", due_on=D(3))
@@ -213,8 +223,10 @@ check("score equals the sum of its parts",
           + t.get("score_neglect", 0) + t.get("score_age", 0) + t.get("score_quickwin", 0)
           for t in top),
       json.dumps([{k: v for k, v in t.items() if k.startswith("score")} for t in top]))
+scored = {t["id"]: t for t in repo.task_list(order="score", limit=200)}
 check("hard deadline outranks a soft one at similar distance",
-      any(t["id"] == mercer["id"] for t in repo.task_list(order="score", limit=6)))
+      scored[mercer["id"]]["score"] > scored[mercer_soft_twin["id"]]["score"],
+      f"mercer={scored[mercer['id']]['score']} twin={scored[mercer_soft_twin['id']]['score']}")
 
 section("Deferral is counted and logged")
 before = repo.task_get(mercer["id"])["defer_count"] if "defer_count" in repo.task_get(mercer["id"]) else 0
