@@ -223,10 +223,18 @@ check("score equals the sum of its parts",
           + t.get("score_neglect", 0) + t.get("score_age", 0) + t.get("score_quickwin", 0)
           for t in top),
       json.dumps([{k: v for k, v in t.items() if k.startswith("score")} for t in top]))
-scored = {t["id"]: t for t in repo.task_list(order="score", limit=200)}
+# Query the two fixtures by id directly, not a bounded top-N: the deploy
+# report caught that limit=200 is the exact same bug shape as the top-6 this
+# replaced, just with a higher threshold (~98 actionable today) that would
+# eventually get crossed too -- and worse, silently as a KeyError crash
+# instead of a clean FAIL line, since backup.sh's new FAIL-line capture has
+# nothing to grep out of a traceback.
+scores = {r["id"]: r["score"] for r in db.rows(
+    "select id, score from pa.v_scored where id in (%s, %s)",
+    (mercer["id"], mercer_soft_twin["id"]))}
 check("hard deadline outranks a soft one at similar distance",
-      scored[mercer["id"]]["score"] > scored[mercer_soft_twin["id"]]["score"],
-      f"mercer={scored[mercer['id']]['score']} twin={scored[mercer_soft_twin['id']]['score']}")
+      scores[mercer["id"]] > scores[mercer_soft_twin["id"]],
+      f"mercer={scores[mercer['id']]} twin={scores[mercer_soft_twin['id']]}")
 
 section("Deferral is counted and logged")
 before = repo.task_get(mercer["id"])["defer_count"] if "defer_count" in repo.task_get(mercer["id"]) else 0
