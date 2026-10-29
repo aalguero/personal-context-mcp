@@ -22,6 +22,14 @@ MODEL = "claude-sonnet-5"
 # retry silently — hence a hard cap rather than an unbounded while loop.
 MAX_TOOL_TURNS = 20
 
+# The fix-4 deploy found the actual cause of the empty-reply bug the previous
+# fix only made loud, not correct: a real run hit stop_reason='max_tokens'
+# with block_types=['thinking'] — the model's thinking used the *entire*
+# 4096-token budget for that turn, leaving zero room for the answer itself.
+# No `thinking` parameter is passed here, so there's no budget to bound
+# directly; the robust fix is headroom, not a guess at undocumented defaults.
+MAX_TOKENS = 16000
+
 log = logging.getLogger("futile-assistant.agent_loop")
 
 
@@ -54,7 +62,7 @@ def run(
     for turn in range(1, max_turns + 1):
         response = client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=MAX_TOKENS,
             system=system_prompt,
             tools=tools,
             messages=messages,

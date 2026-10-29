@@ -47,6 +47,11 @@ OPERATIONS_PROJECT = 37  # Personal Assistant Operations — numeric id, the pro
 BACKUP_STATUS_FILE = Path("/home/dremon/.personal-context/backup-status.json")
 BACKUP_STALE_AFTER_HOURS = 30  # nightly at 03:15; one missed night plus a buffer
 
+# Captured at import time, which happens once when the scheduler (or a
+# one-shot CLI command) starts — a proxy for "when did this process begin."
+# Needed for the grace-period fix below.
+PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
 CHECKIN_STALE_AFTER_HOURS = 6
 # Task 182's own guard against crying wolf: the longest legitimate gap between
 # fires is the overnight one (19:48 to 07:48, twelve hours), so a naive 6h
@@ -117,12 +122,28 @@ def _check_checkin() -> None:
                   start_h, start_m, end_h, end_m)
         return
 
+    now_utc = now_et.astimezone(timezone.utc)
     last_run = toolset.dispatch("get_context", {"category": WATCHDOG_CATEGORY}).get("last_run_at")
+
     if not last_run:
-        log.info("Check-in staleness check: no watchdog timestamp recorded yet, skipping")
+        # Fix-4 deploy found this blind spot: last_run_at is only written on a
+        # *successful* run, so "the agent has never once succeeded" and "this
+        # process just started a minute ago" looked identical — meaning a
+        # permanently-broken agent would never trip this check at all, the
+        # same "change that controls nothing" shape as everything else this
+        # project has been burned by. A grace period since process start
+        # keeps a fresh restart quiet while still catching persistent failure.
+        since_start_hours = (now_utc - PROCESS_STARTED_AT).total_seconds() / 3600
+        if since_start_hours <= CHECKIN_STALE_AFTER_HOURS:
+            log.info("Check-in staleness check: no successful run yet, within the "
+                      "%.1fh grace period since process start, skipping", CHECKIN_STALE_AFTER_HOURS)
+            return
+        detail = f"no successful run since process start, {since_start_hours:.1f}h ago"
+        log.info("Check-in staleness check: STALE (%s)", detail)
+        _apply("checkin_stale", True, detail)
         return
 
-    age_hours = (now_et.astimezone(timezone.utc) - datetime.fromisoformat(last_run)).total_seconds() / 3600
+    age_hours = (now_utc - datetime.fromisoformat(last_run)).total_seconds() / 3600
     stale = age_hours > CHECKIN_STALE_AFTER_HOURS
     detail = f"last successful run {last_run}, {age_hours:.1f}h ago"
     log.info("Check-in staleness check: %s (%s)", "STALE" if stale else "fresh", detail)
