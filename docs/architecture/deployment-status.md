@@ -63,7 +63,7 @@ here, which is how a restore was independently verified.
 | Auth | shared secret, ASGI middleware, all paths, 404 on failure, fail-closed at startup |
 | Tools | 29 = 4 context tools + 25 `pa_*` |
 | Migrations | 001, 002, 003 applied. **004 specified, not written** — backlog H |
-| Backups | **COMPLETE.** `3530fc5`. Local + `vocalassistant` + B2 (compliance-locked 30 days). Restore proven 2026-10-19. See `backup-status.md` |
+| Backups | **Working again as of 2026-10-28, `a07569e`/`09d0f97`.** Local + `vocalassistant` + B2 (compliance-locked 30 days). Restore proven 2026-10-19. **Zero backups shipped 10-21 to 10-28** — a smoke-test check was silently coupled to production rankings; fixed, and the watchdog now keys on `last_success` so this can't go unnoticed again. See `backup-status.md`'s 10-21/10-28 incident |
 | Test suite | 63 checks, 0.28 s. **Guarded:** refuses any database but `pa_verify` / `pa_scratch*` |
 | Disk encryption | **Server: NONE** (task 112). **shadow: YES** — and shadow is where the age private key lives, which is what makes the asymmetry hold. See `encryption-at-rest.md` |
 | Journal access | `dremon` is in `systemd-journal` on both the server and the Pi as of 2026-10-20 (task 122) |
@@ -316,7 +316,7 @@ pointed at production.
   noticed something" (`pa.task.source` currently allows only `manual, claude,
   google_tasks, gmail, calendar, recurrence, import`).
 - **Split `@phone`** into `@call` / `@private` / `@handsfree` / `@screen` and retag.
-- **Wire the backup status file into `pa_daily_brief`.**
+- ~~Wire the backup status file into `pa_daily_brief`.~~ **Addressed differently, 2026-10-28**: a standalone watchdog (`futile-pa/assistant/watchdog.py`, part of the new assistant backend — `docs/architecture/standalone-assistant.md`) checks `last_success` on its own schedule and raises a task, rather than waiting for a human to read the daily brief. Same need, a more independent mechanism.
 - **Nine tool-surface gaps** in backlog section J — chiefly that `pa_task_update`
   replaces `notes` while `pa_task_complete` appends, and that `pa_task_update` has no
   `depends_on`, `parent_task_id` or `kind`.

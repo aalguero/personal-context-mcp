@@ -217,6 +217,48 @@ at production.
 is not. What Andre deleted was probably the plaintext dump file. Dropping it is his
 call, reasonably after the practice restore succeeds.
 
+## Incident, 2026-10-21 to 2026-10-28: eight nights of zero backups
+
+Every nightly `backup.sh` run from 10-21 through 10-28 failed at the
+verification gate on one `tests/test_smoke.py` check — "hard deadline outranks
+a soft one at similar distance" — which asserted a fixture task ranked in the
+top 6 by score **across the whole database**, fixtures and real data together.
+Andre's real backlog grew past the fixture on the evening of 10-20; the check
+started failing the very next night and stayed broken, because overdue tasks
+only gain urgency with age. The gate correctly failed closed — nothing was
+encrypted, kept or shipped for eight consecutive nights — but task 156, the
+alert this exact scenario is designed to raise, sat open and uninvestigated
+the entire time (see the working agreement's own history with task 156).
+No data was lost: the infrastructure (Postgres, age, the Pi, B2, disk, timer)
+was healthy throughout, and the 10-20 15:21 backup remained the newest copy
+everywhere until the fix landed.
+
+**Found by:** Andre observing no recent activity in the Backblaze B2 console
+directly — not by any alert, not by the dashboard. The automated system caught
+its own failure correctly (task 156) and then the catch itself went unseen,
+which is this project's recurring failure shape one level deeper than usual:
+the alarm fired and sat unread through the very reorganisation built to stop
+that from happening.
+
+**Fixed, `a07569e`/`09d0f97`, verified 2026-10-28 22:02–22:05:** the check now
+compares a same-distance soft-deadline twin fixture directly against the
+hard-deadline one, rather than asserting a position in a ranking real data was
+always going to eventually invade — and queries the two fixtures by id, not a
+bounded top-N, after a deploy-time review caught that the first version of the
+fix (`limit=200`) was the same bug shape with a higher, still-finite ceiling.
+A real run that night succeeded end to end: `63 passed, 0 failed`, identical
+sha256 in all three destinations, task 156 closed itself. The backup
+watchdog (`assistant/watchdog.py`) was also found keying on `last_attempt`,
+which updates on a failed run too — it reported "fresh" through all eight
+nights. Now keys on `last_success`.
+
+**Decided 2026-10-29 (Andre):** stay fail-closed on a verification failure —
+do **not** keep a local copy marked `verified: false` as a consolation. A day
+or two of drift is an acceptable worst case; a system that sometimes ships
+unverified copies is a harder property to reason about than "verified or
+nothing," and the watchdog now means a dead run can't go unnoticed for eight
+days again regardless.
+
 ## The disk is not encrypted at rest (confirmed 2026-10-10, task 112)
 
 No `crypto_LUKS`, no `/etc/crypttab`, `/home` is plain ext4 on LVM on `nvme0n1p3`, and
