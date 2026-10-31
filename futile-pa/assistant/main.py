@@ -3,22 +3,24 @@
 With no arguments: runs the periodic check-in scheduler forever (the
 deployed mode — see systemd/futile-assistant.service).
 
-For manual verification before Signal exists (Phase 2):
+For manual verification:
     python -m assistant.main checkin-once      # run one check-in cycle now
     python -m assistant.main ask "..."         # one on-demand exchange
     python -m assistant.main watchdog-once     # run the two staleness checks now
+    python -m assistant.main signal-send "..." # send one Signal message directly
 """
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pa.db import get_db
 
-from . import checkin, quickask, watchdog
+from . import checkin, quickask, signal_bridge, watchdog
 
 # CRON_TZ=America/New_York 48 7,11,15,19 * * * from task-agent-brief.md,
 # reimplemented directly rather than via a cron-string parser — four fixed
@@ -92,6 +94,17 @@ def main() -> None:
         finally:
             get_db().close()
         return
+    if len(sys.argv) >= 2 and sys.argv[1] == "signal-send":
+        message = " ".join(sys.argv[2:]) or "Test message from the assistant backend."
+        signal_bridge.send(message)
+        print("Sent (or skipped — check the log line above for which).")
+        return
+
+    # Default: the scheduler and the Signal bridge run concurrently in one
+    # process. The bridge's own run_bridge() no-ops immediately if Signal
+    # isn't configured yet, so this is safe to deploy before the Docker
+    # container or the linked device exist.
+    threading.Thread(target=signal_bridge.run_bridge, name="signal-bridge", daemon=True).start()
     run_scheduler()
 
 

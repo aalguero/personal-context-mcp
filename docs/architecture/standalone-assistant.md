@@ -189,11 +189,18 @@ confirm an action back to you.
    (tasks-in-a-project vs. a new `pa.list`/`pa.list_item` table) once the foundation
    above is real and in daily use.
 
-## Open questions for Andre
+## Open questions for Andre — all resolved 2026-10-30
 
-- **Resolved 2026-10-28:** "same backend" = same prompt/tools/data, two thin clients.
-  Transport = Signal, not Telegram or SMS, via the `signal-cli-rest-api` Docker
-  container (Debian's `docker.io` package, same install pattern as `vocalassistant`).
-- Linked-device vs. separate registered number for `signal-cli` (default proposed:
-  linked device — free, but reads as a self-conversation).
-- Anything in the on-demand brief draft above that should be tighter or looser.
+- "same backend" = same prompt/tools/data, two thin clients. Transport = Signal,
+  not Telegram or SMS, via the `signal-cli-rest-api` Docker container.
+- **Linked device, final.** Confirmed over a separately registered number.
+- **Sender allowlist number: supplied by Andre, kept out of this doc and out of
+  git** — goes straight into `.env` on the server as `SIGNAL_ALLOWED_SENDER`,
+  same handling as `PA_AUTH_TOKEN`.
+- **The sensitivity filter is in scope for Phase 2**, not deferred. Implemented
+  per-line against each outbound message's referenced task ids, not per-message —
+  a check-in asking three questions where only one touches a sensitive project
+  should still send the other two legibly. See `assistant/sensitivity_filter.py`.
+- **Conversation memory resets nightly by default, adjustable via
+  `SIGNAL_MEMORY_RESET_HOURS`** (env var, not a code constant) — Andre asked for
+  this specifically so the interval can change without a deploy.

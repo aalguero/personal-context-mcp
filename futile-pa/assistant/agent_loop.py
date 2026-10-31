@@ -35,13 +35,21 @@ log = logging.getLogger("futile-assistant.agent_loop")
 
 def run(
     system_prompt: str,
-    user_message: str,
+    user_message: str | list[dict[str, Any]],
     tools: list[dict[str, Any]],
     dispatch: Callable[[str, dict[str, Any]], Any],
     *,
     max_turns: int = MAX_TOOL_TURNS,
 ) -> str:
     """Run one conversation turn to completion, dispatching any tool calls.
+
+    user_message is either a single string (the common case: one question,
+    no history — checkin.py and quickask.ask() both use this) or a pre-built
+    list of {"role", "content"} turns, for a caller that maintains its own
+    conversation across calls (the Signal bridge, so "add milk too" after
+    "add eggs" has the earlier exchange to refer to). Either way, this
+    function's own tool-call turns are local to this one call and never
+    leak into what the caller persists.
 
     Returns the final assistant text. Raises RuntimeError if max_turns is
     exceeded, if the model ends with no text at all, and lets an Anthropic API
@@ -57,7 +65,10 @@ def run(
     instead of swallowing it.
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+    if isinstance(user_message, str):
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+    else:
+        messages = list(user_message)
 
     for turn in range(1, max_turns + 1):
         response = client.messages.create(
