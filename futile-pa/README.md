@@ -14,16 +14,6 @@ driven through the real MCP SDK (1.27.0) using the low-level `Server` API — th
 same shape as your existing server — confirming all 25 tool schemas are accepted,
 that calls round-trip, and that your existing `get_context` still routes.
 
-**Your Postgres is 18; I could only test on 16** — the package repository for 18
-is blocked from my sandbox. Nothing here uses a feature that changed between 16
-and 18: no expression-generated columns (the one relevant PG 18 change, where
-`GENERATED ... AS (expr)` now defaults to `VIRTUAL`), no `MERGE`, no temporal
-constraints, and every function fully qualifies its object names so search-path
-changes cannot bite. The migrations are transactional, so a failure rolls back
-cleanly. Still, run `tests/test_smoke.py` on your box against a scratch database
-before trusting it — that is the definitive answer for PG 18, and it takes a
-minute. See section 1.
-
 ```
 migrations/001_core.sql          schema, triggers, views, query functions
 migrations/002_reference_data.sql contexts, situations, your areas/people/goals
@@ -423,22 +413,9 @@ stated by you. Two things need your attention:
 
 Deliberately deferred, in the order they probably matter:
 
-- **The dashboard.** Needs a decision about how it reaches the data — your
-  Postgres is not reachable from Claude's side, so either a page regenerated and
-  republished each morning from a scheduled task (fresh as of the last run,
-  works from your phone), or something served on the server itself reading
-  Postgres live (truly live, only on your LAN).
-- **Calendar and Gmail joins.** The brief currently knows nothing about your
-  actual day. Connectors for both are available in session; wiring conflict
-  detection ("you've scheduled 4 hours of land work on a day with two calls")
-  means putting calendar events alongside `scheduled_for`.
 - **Bills.** A recurrence with `hard_deadline` and an amount gets most of the
   way; a proper payables table with amounts and confirmation is a small
   migration.
 - **Meals and groceries.** Wants its own tables (recipe, meal plan, pantry,
-  shopping list) with a vitamin-K field on ingredients, given the INR
-  constraint. That constraint is exactly the kind of thing a system should
-  enforce rather than leave to memory.
-- **Finance.** Connected but separate, as you framed it. The account and
-  holdings detail currently in the context store wants real tables once the
-  Mercer transition settles.
+  shopping list) 
+- **Finance.** Connected but separate, as you framed it. Update this now that your advisor relationship is re-established.
