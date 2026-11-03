@@ -1,8 +1,8 @@
 # personal-context-mcp
 
 An MCP (Model Context Protocol) server that exposes Andre's personal context —
-work, tech stack, projects, goals, and so on — plus a task/project management
-backend (`futile-pa`), as tools any MCP-compatible Claude client can call.
+work, tech stack, projects, goals, and so on — plus a personalized virtual assistant with task/project management and persistent
+backend (`futile-pa`), as tools any MCP-compatible client can call.
 
 29 tools in total:
 
