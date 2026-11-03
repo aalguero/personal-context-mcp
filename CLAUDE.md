@@ -255,4 +255,5 @@ review cadence). Data hygiene, not code:
 surface was built for capture and not for correction. Contexts can be set and never
 changed (silently). Dates can be moved and never cleared. Dependencies can be declared
 at birth and never added. Capture is the cheap half; correction is where keeping data
-honest actually happens.
+honest actually happens. The decision to start with capture only was made as a secondary 
+security measure before full security was implemented. It is now open for update
