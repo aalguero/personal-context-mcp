@@ -1,0 +1,367 @@
+<title>Brook House Topology</title>
+<style>
+  :root {
+    --bg: #f1f5f3;
+    --surface: #ffffff;
+    --surface-alt: #e7eeea;
+    --border: #cdd9d3;
+    --ink: #142420;
+    --muted: #51665e;
+    --accent-data: #0f7f86;
+    --accent-io: #6a4fa0;
+    --accent-durability: #ad6420;
+    --accent-planned: #7c8d85;
+    --mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+    --sans: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1613;
+      --surface: #182420;
+      --surface-alt: #1f2e28;
+      --border: #30423b;
+      --ink: #e7efea;
+      --muted: #9ab0a6;
+      --accent-data: #4fd3cf;
+      --accent-io: #b39ce6;
+      --accent-durability: #e8a257;
+      --accent-planned: #7e9088;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1613;
+    --surface: #182420;
+    --surface-alt: #1f2e28;
+    --border: #30423b;
+    --ink: #e7efea;
+    --muted: #9ab0a6;
+    --accent-data: #4fd3cf;
+    --accent-io: #b39ce6;
+    --accent-durability: #e8a257;
+    --accent-planned: #7e9088;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+  }
+  main {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 56px 32px 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+  }
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 760px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-data);
+  }
+  h1 {
+    font-size: clamp(32px, 4.5vw, 44px);
+    line-height: 1.08;
+    margin: 0;
+    font-weight: 700;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0;
+    max-width: 68ch;
+  }
+  .lede code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    color: var(--ink);
+    background: var(--surface-alt);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  figure {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 20px;
+  }
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  figcaption {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    padding: 18px 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13.5px;
+    color: var(--ink);
+  }
+  .legend-item .swatch {
+    width: 28px;
+    height: 0;
+    border-top: 2.5px solid currentColor;
+    flex-shrink: 0;
+  }
+  .legend-item .swatch.dashed {
+    border-top-style: dashed;
+  }
+  .legend-item .label { color: var(--muted); }
+  .legend-item .label b { color: var(--ink); font-weight: 600; }
+
+  footer {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+  }
+
+  svg text { font-family: var(--sans); fill: var(--ink); }
+  svg text.mono { font-family: var(--mono); }
+  svg text.muted { fill: var(--muted); }
+  svg .host-title { font-weight: 700; font-size: 17px; }
+  svg .host-sub { font-size: 11.5px; }
+  svg .comp-title { font-weight: 600; font-size: 12.5px; }
+  svg .comp-sub { font-size: 10.5px; }
+  svg .edge-label { font-size: 11px; }
+  svg .zone-label {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    fill: var(--muted);
+  }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Architecture — 2026-11-02</div>
+    <h1>Brook House Topology</h1>
+    <p class="lede">
+      Three machines on one tailnet run Andre's personal assistant.
+      <code>futileassistant</code> holds the data and the reasoning,
+      <code>vocalassistant</code> is the ears and mouth in the living room,
+      <code>homeassistant</code> routes the house. Everything inside the
+      dashed boundary only talks to itself over Tailscale; the one way in
+      from outside is the Funnel-exposed MCP endpoint.
+    </p>
+  </header>
+
+  <figure>
+    <svg viewBox="0 0 1420 980" role="img" aria-label="Network diagram: a left-hand column of external services — GitHub, Backblaze B2, Claude clients, the Anthropic API, Signal — connects rightward into a tailnet holding shadow, futileassistant, homeassistant and vocalassistant. futileassistant exposes an MCP server via Tailscale Funnel as the one public ingress; vocalassistant and homeassistant exchange voice-pipeline audio over ESPHome and Wyoming on the far right, untouched by the external connections.">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"></path>
+        </marker>
+      </defs>
+
+      <!-- ===================== external services — left column, outside the tailnet ===================== -->
+      <rect x="40" y="100" width="300" height="110" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="60" y="132" class="host-title">GitHub</text>
+      <text x="60" y="152" class="host-sub muted">source of truth</text>
+      <text x="60" y="182" class="comp-sub mono muted">aalguero/personal-context-mcp → git pull</text>
+
+      <rect x="40" y="230" width="300" height="110" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="60" y="262" class="host-title">Backblaze B2</text>
+      <text x="60" y="282" class="host-sub muted">off-site, out of the house</text>
+      <text x="60" y="312" class="comp-sub mono muted">← nightly, age-encrypted, 30d lock</text>
+
+      <rect x="40" y="360" width="300" height="160" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="60" y="392" class="host-title">Claude clients</text>
+      <text x="60" y="412" class="host-sub muted">external, public internet</text>
+      <text x="60" y="442" class="comp-sub mono muted">Desktop · claude.ai · mobile app</text>
+      <text x="60" y="460" class="comp-sub mono muted">custom connector → futileassistant/mcp</text>
+      <text x="60" y="488" class="comp-sub mono muted">each client holds its own Anthropic key</text>
+
+      <rect x="40" y="540" width="300" height="130" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="60" y="572" class="host-title">Anthropic API</text>
+      <text x="60" y="592" class="host-sub muted">claude-sonnet-5</text>
+      <text x="60" y="622" class="comp-sub mono muted">← tool-use loop, 4×/day + on-demand</text>
+      <text x="60" y="640" class="comp-sub mono muted">messages.create, max_tokens 16000</text>
+
+      <rect x="40" y="690" width="300" height="130" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="60" y="722" class="host-title">Signal network</text>
+      <text x="60" y="742" class="host-sub muted">Andre's phone, end-to-end encrypted</text>
+      <text x="60" y="772" class="comp-sub mono muted">↔ poll /v1/receive every 3s</text>
+      <text x="60" y="790" class="comp-sub mono muted">"Note to Self" thread, linked device</text>
+
+      <!-- ===================== tailnet boundary ===================== -->
+      <rect x="380" y="86" width="1000" height="828" rx="18" fill="none" stroke="var(--border)" stroke-width="2" stroke-dasharray="3 7"></rect>
+      <text x="404" y="112" class="zone-label">TAILNET · *.cormorant-barb.ts.net — private mesh, no inbound ports</text>
+
+      <!-- ===================== shadow ===================== -->
+      <rect x="410" y="140" width="260" height="124" rx="10" fill="var(--surface-alt)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="430" y="172" class="host-title">shadow</text>
+      <text x="430" y="192" class="host-sub muted">Andre's desktop</text>
+      <text x="430" y="222" class="comp-sub mono muted">Claude Code · local git clone</text>
+      <text x="430" y="240" class="comp-sub mono muted">~/.claude.json MCP connector</text>
+
+      <!-- ===================== futileassistant (big box) ===================== -->
+      <rect x="410" y="310" width="580" height="570" rx="12" fill="var(--surface)" stroke="var(--accent-data)" stroke-width="2"></rect>
+      <text x="434" y="344" class="host-title">futileassistant</text>
+      <text x="434" y="364" class="host-sub muted">Debian · the brain</text>
+
+      <!-- row: MCP server -->
+      <rect x="434" y="384" width="532" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="450" y="408" class="comp-title">MCP server</text>
+      <text x="450" y="426" class="comp-sub mono muted">personal-context-mcp · mcp==1.27.0 · :8765 /mcp</text>
+
+      <!-- row: assistant backend -->
+      <rect x="434" y="460" width="532" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="450" y="484" class="comp-title">Assistant backend</text>
+      <text x="450" y="502" class="comp-sub mono muted">futile-assistant.service · checkin · quickask · watchdog</text>
+
+      <!-- row: postgres + context.json -->
+      <rect x="434" y="536" width="256" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="450" y="560" class="comp-title">PostgreSQL 18</text>
+      <text x="450" y="578" class="comp-sub mono muted">db futile_assistant · schema pa</text>
+
+      <rect x="710" y="536" width="256" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="726" y="560" class="comp-title">context.json</text>
+      <text x="726" y="578" class="comp-sub mono muted">4 context tools · mode 600</text>
+
+      <!-- internal arrow: backend -> postgres, direct dispatch -->
+      <line x1="570" y1="524" x2="570" y2="536" stroke="var(--accent-data)" stroke-width="1.6" marker-end="url(#arrow)"></line>
+      <line x1="490" y1="524" x2="490" y2="536" stroke="var(--muted)" stroke-width="1.4" stroke-dasharray="2 4" marker-end="url(#arrow)"></line>
+      <text x="742" y="520" class="edge-label mono" text-anchor="middle" fill="var(--accent-data)">dispatch() direct — no MCP hop</text>
+
+      <!-- row: signal-cli + backup.sh -->
+      <rect x="434" y="612" width="256" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="450" y="636" class="comp-title">signal-cli-rest-api</text>
+      <text x="450" y="654" class="comp-sub mono muted">Docker · 127.0.0.1:8080 · linked device</text>
+
+      <rect x="710" y="612" width="256" height="64" rx="8" fill="var(--surface-alt)" stroke="var(--border)"></rect>
+      <text x="726" y="636" class="comp-title">backup.sh / timer</text>
+      <text x="726" y="654" class="comp-sub mono muted">age encryption · nightly 03:22</text>
+
+      <text x="434" y="716" class="comp-sub mono muted">auth: shared-secret Bearer token · 404 on failure, fail-closed</text>
+      <text x="434" y="736" class="comp-sub mono muted">/.well-known/* → 404 always (blocks OAuth discovery probes)</text>
+
+      <rect x="434" y="762" width="532" height="92" rx="8" fill="none" stroke="var(--border)" stroke-dasharray="2 5"></rect>
+      <text x="450" y="786" class="comp-title muted">GitHub checkout</text>
+      <text x="450" y="804" class="comp-sub mono muted">aalguero/personal-context-mcp</text>
+      <text x="450" y="822" class="comp-sub mono muted">futile-pa/ subdirectory · no restart to deploy backup.sh</text>
+      <text x="450" y="840" class="comp-sub mono muted">systemd restart required for the assistant backend</text>
+
+      <!-- ===================== homeassistant ===================== -->
+      <rect x="1060" y="140" width="280" height="150" rx="10" fill="var(--surface-alt)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="1080" y="172" class="host-title">homeassistant</text>
+      <text x="1080" y="192" class="host-sub muted">Pi 4 · Home Assistant OS</text>
+      <text x="1080" y="222" class="comp-sub mono muted">Assist pipeline — intent match</text>
+      <text x="1080" y="240" class="comp-sub mono muted">+ TTS, local-first routing</text>
+      <text x="1080" y="264" class="comp-sub mono muted">Tailscale Serve (private, not Funnel)</text>
+
+      <!-- ===================== vocalassistant ===================== -->
+      <rect x="1060" y="340" width="280" height="300" rx="10" fill="var(--surface-alt)" stroke="var(--border)" stroke-width="1.5"></rect>
+      <text x="1080" y="372" class="host-title">vocalassistant</text>
+      <text x="1080" y="392" class="host-sub muted">Pi 5 · Raspberry Pi OS</text>
+      <text x="1080" y="424" class="comp-sub mono muted">Linux Voice Assistant (LVA)</text>
+      <text x="1080" y="440" class="comp-sub mono muted">Docker · wake word + satellite</text>
+      <text x="1080" y="468" class="comp-sub mono muted">wyoming-faster-whisper · :10300</text>
+      <text x="1080" y="484" class="comp-sub mono muted">base-int8, ~1.8s per command</text>
+      <text x="1080" y="512" class="comp-sub mono muted">Seeed ReSpeaker XVF3800</text>
+      <text x="1080" y="528" class="comp-sub mono muted">USB mic array, hardware AEC</text>
+      <text x="1080" y="556" class="comp-sub mono muted">off-machine backup copy target</text>
+      <text x="1080" y="572" class="comp-sub mono muted">(systemd-journal sha256 check, weekly)</text>
+
+      <!-- edge: vocalassistant -> homeassistant (wake+audio) -->
+      <line x1="1180" y1="340" x2="1180" y2="291" stroke="var(--accent-io)" stroke-width="2" marker-end="url(#arrow)"></line>
+      <text x="1192" y="322" class="edge-label mono" fill="var(--accent-io)">ESPHome :6053 — wake + audio</text>
+
+      <!-- edge: homeassistant -> vocalassistant (STT+TTS) -->
+      <line x1="1240" y1="291" x2="1240" y2="340" stroke="var(--accent-io)" stroke-width="2" marker-end="url(#arrow)"></line>
+      <text x="1252" y="316" class="edge-label mono" fill="var(--accent-io)">Wyoming :10300 STT</text>
+      <text x="1252" y="330" class="edge-label mono" fill="var(--accent-io)">+ TTS reply</text>
+
+      <!-- edge: homeassistant -> futileassistant, planned stage 4 -->
+      <path d="M 1060 220 L 990 220" fill="none" stroke="var(--accent-planned)" stroke-width="1.8" stroke-dasharray="5 5" marker-end="url(#arrow)"></path>
+      <text x="1025" y="208" class="edge-label mono" text-anchor="middle" fill="var(--accent-planned)">planned: stage 4</text>
+      <text x="1025" y="236" class="edge-label mono" text-anchor="middle" fill="var(--accent-planned)">fallback → pa_* (not built)</text>
+
+      <!-- edge: shadow -> futileassistant -->
+      <line x1="570" y1="264" x2="570" y2="310" stroke="var(--accent-data)" stroke-width="2" marker-end="url(#arrow)"></line>
+      <text x="586" y="294" class="edge-label mono" fill="var(--accent-data)">MCP connector, tailnet IP, Bearer token</text>
+
+      <!-- edge: futileassistant -> vocalassistant, nightly backup -->
+      <path d="M 990 560 L 1060 480" fill="none" stroke="var(--accent-durability)" stroke-width="2" marker-end="url(#arrow)"></path>
+      <text x="1002" y="505" class="edge-label mono" fill="var(--accent-durability)">nightly 03:22</text>
+      <text x="1002" y="519" class="edge-label mono" fill="var(--accent-durability)">rsync/ssh, encrypted copy</text>
+
+      <!-- ===================== edges: left column -> futileassistant, all confined to the
+           empty x=340-410 gap between the external column and the tailnet boundary.
+           Each is a direct line to its exact source/destination row — none cross
+           homeassistant, vocalassistant, shadow, or each other's boxes. Relationship
+           detail lives in the box text above, not crammed along these lines. ===================== -->
+
+      <!-- github -> futileassistant's own checkout -->
+      <path d="M 340 155 L 410 794" fill="none" stroke="var(--accent-planned)" stroke-width="1.8" stroke-dasharray="5 5" marker-end="url(#arrow)"></path>
+
+      <!-- futileassistant -> backblaze b2 -->
+      <path d="M 410 812 L 340 285" fill="none" stroke="var(--accent-durability)" stroke-width="2" marker-end="url(#arrow)"></path>
+
+      <!-- claude clients -> futileassistant's mcp server, via Funnel: the one
+           deliberate hole in the boundary, so it alone gets a label on the line. -->
+      <path d="M 340 416 L 410 416" fill="none" stroke="var(--accent-data)" stroke-width="2.6" marker-end="url(#arrow)"></path>
+      <text x="375" y="404" class="edge-label mono" text-anchor="middle" fill="var(--accent-data)">Funnel — public</text>
+
+      <!-- claude clients -> anthropic api (both external, adjacent in the column) -->
+      <line x1="190" y1="520" x2="190" y2="540" stroke="var(--accent-data)" stroke-width="1.6" marker-end="url(#arrow)"></line>
+
+      <!-- futileassistant's assistant backend -> anthropic api -->
+      <path d="M 410 492 L 340 605" fill="none" stroke="var(--accent-data)" stroke-width="2" marker-end="url(#arrow)"></path>
+
+      <!-- futileassistant's signal-cli-rest-api -> signal network -->
+      <path d="M 410 644 L 340 755" fill="none" stroke="var(--accent-io)" stroke-width="2" marker-end="url(#arrow)"></path>
+    </svg>
+
+    <figcaption>
+      The dashed boundary is the real security line: everything inside it is tailnet-only,
+      reachable by nothing on the open internet. The one deliberate hole is the Funnel arrow —
+      a single auth-gated path into the MCP server's <code>:8765/mcp</code>, nothing else on the box.
+      Backups leave the house twice a night, both encrypted before they cross the boundary.
+      The assistant backend talks to Postgres directly, never through the MCP server's own
+      transport layer — a second internal client of the same data, not a dependency on the first.
+    </figcaption>
+  </figure>
+
+  <div class="legend">
+    <div class="legend-item"><span class="swatch" style="color: var(--accent-data);"></span><span class="label"><b>Data &amp; reasoning</b> — MCP tools, Postgres, Claude Sonnet 5 calls</span></div>
+    <div class="legend-item"><span class="swatch" style="color: var(--accent-io);"></span><span class="label"><b>Human I/O</b> — voice pipeline, Signal messaging</span></div>
+    <div class="legend-item"><span class="swatch" style="color: var(--accent-durability);"></span><span class="label"><b>Durability</b> — nightly encrypted backups</span></div>
+    <div class="legend-item"><span class="swatch dashed" style="color: var(--accent-planned);"></span><span class="label"><b>Deploy / planned</b> — git pull; stage 4 not yet built</span></div>
+  </div>
+
+  <footer>futile-pa / personal-context-mcp — reflects the architecture as of 2026-11-02, after the Signal bridge (Phase 2) and the backup incident fix. Update this file as the system changes; it drifts the moment it stops being read.</footer>
+</main>
