@@ -27,7 +27,11 @@ def send(message: str) -> None:
         return
     try:
         signal_bridge.send(message)
-    except Exception:
+    except Exception as e:
         # The log line above already has the content — a Signal delivery
         # failure shouldn't be treated as the check-in run itself failing.
-        log.exception("Failed to send check-in output over Signal — it's still in %s", LOG_PATH)
+        # No traceback: see signal_bridge's docstring on keeping numbers
+        # out of logs. SignalAPIError's text is safe; anything else gets
+        # its class name only.
+        reason = str(e) if isinstance(e, signal_bridge.SignalAPIError) else type(e).__name__
+        log.error("Failed to send check-in output over Signal (%s) — it's still in %s", reason, LOG_PATH)

@@ -6,9 +6,18 @@ agent loop quickask.py exposes with a short rolling conversation history,
 and sends the reply back through the same sensitivity filter every other
 outbound Signal message goes through (notify.py included, once wired).
 
+Separate-number mode: the bot is its own Signal account (registered
+2026-11-04), not a linked device on Andre's account — a linked device would
+receive every conversation and could send as him. SIGNAL_OWN_NUMBER is the
+bot's number and SIGNAL_ALLOWED_SENDER is Andre's; the two must differ.
+
+Neither number may reach a log. The receive URL contains the bot's number
+and requests puts the URL into its exception messages, so every HTTP call
+goes through _call(), which re-raises as SignalAPIError carrying only a
+fixed label and a status code. Callers log that, never a traceback.
+
 Deliberately tolerant of being unconfigured: this module can be deployed
-and imported before the Docker container or the linked device exist, so
-Phase 1 keeps working while Phase 2 is being set up. is_configured() gates
+and imported before the Docker container exists. is_configured() gates
 both send() and run_bridge() rather than raising at import time.
 """
 from __future__ import annotations
@@ -25,12 +34,13 @@ from . import quickask
 from .sensitivity_filter import filter_outbound
 
 log = logging.getLogger("futile-assistant.signal")
+# urllib3 logs each request path at DEBUG, and the receive path contains the
+# bot's number. main.py runs at INFO so it is silent today; this keeps it
+# silent if someone turns the root logger up to DEBUG to troubleshoot.
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 API_BASE = os.environ.get("SIGNAL_API_BASE", "http://127.0.0.1:8080")
-# Linked-device mode (the decided default): signal-cli operates as Andre's
-# own number, so OWN_NUMBER and ALLOWED_SENDER end up holding the same
-# value. Kept as two names anyway — a separately registered number would
-# need them to differ, and that's a config change, not a code change.
+# The bot's own number, and the only sender it answers. Must differ.
 OWN_NUMBER = os.environ.get("SIGNAL_OWN_NUMBER", "")
 ALLOWED_SENDER = os.environ.get("SIGNAL_ALLOWED_SENDER", "")
 POLL_SECONDS = 3
@@ -49,23 +59,34 @@ def _memory_reset_hours() -> float:
     return float(os.environ.get("SIGNAL_MEMORY_RESET_HOURS", "24"))
 
 
+class SignalAPIError(Exception):
+    """A failed call to the container. The message is a fixed label plus a
+    status code or exception class name — never a URL, body or number."""
+
+
+def _call(label: str, method: str, url: str, **kwargs: Any) -> requests.Response:
+    try:
+        resp = requests.request(method, url, timeout=30, **kwargs)
+        resp.raise_for_status()
+        return resp
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else "?"
+        raise SignalAPIError(f"{label}: HTTP {status}") from None
+    except requests.RequestException as e:
+        raise SignalAPIError(f"{label}: {type(e).__name__}") from None
+
+
 def send(message: str) -> None:
     if not is_configured():
         log.info("Signal not configured yet (SIGNAL_OWN_NUMBER/SIGNAL_ALLOWED_SENDER unset) — not sending")
         return
     text = filter_outbound(message)
-    resp = requests.post(
-        f"{API_BASE}/v2/send",
-        json={"message": text, "number": OWN_NUMBER, "recipients": [ALLOWED_SENDER]},
-        timeout=30,
-    )
-    resp.raise_for_status()
+    _call("send", "POST", f"{API_BASE}/v2/send",
+          json={"message": text, "number": OWN_NUMBER, "recipients": [ALLOWED_SENDER]})
 
 
 def _receive() -> list[dict[str, Any]]:
-    resp = requests.get(f"{API_BASE}/v1/receive/{OWN_NUMBER}", timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    return _call("receive", "GET", f"{API_BASE}/v1/receive/{OWN_NUMBER}").json()
 
 
 def _reset_memory_if_due() -> None:
@@ -113,10 +134,22 @@ def run_bridge() -> None:
         log.warning("Signal bridge disabled — SIGNAL_OWN_NUMBER/SIGNAL_ALLOWED_SENDER not set")
         return
     log.info("Signal bridge starting, polling %s every %ss", API_BASE, POLL_SECONDS)
+    # Log on state change only: a dead container would otherwise write a
+    # line every POLL_SECONDS for as long as it stays dead.
+    failing = False
     while True:
         try:
             for envelope in _receive():
                 _handle_incoming(envelope)
-        except Exception:
-            log.exception("Signal receive loop error")
+            if failing:
+                log.info("Signal receive recovered")
+                failing = False
+        except SignalAPIError as e:
+            if not failing:
+                log.warning("Signal receive failing (%s) — will keep retrying quietly", e)
+                failing = True
+        except Exception as e:
+            # Not a traceback: an unexpected exception's message could carry
+            # envelope values. The class name is enough to start from.
+            log.error("Signal receive loop error: %s", type(e).__name__)
         time.sleep(POLL_SECONDS)
