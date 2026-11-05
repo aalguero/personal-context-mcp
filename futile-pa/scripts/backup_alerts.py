@@ -5,7 +5,7 @@ Called once at the end of every backup.sh run with that run's outcome. Lives
 in its own file rather than in heredocs so that the code a scratch-database
 test exercises is the code production runs, not a copy of it.
 
-Four alert kinds, each named for the condition it detects. Identity is
+Five alert kinds, each named for the condition it detects. Identity is
 pa.task.metadata->>'backup_alert', written in the same transaction as the
 task; the duplicate guard and the auto-close both match on it -- never on the
 title, which is a label for a human and may be edited freely.
@@ -15,6 +15,7 @@ title, which is a label for a human and may be edited freely.
   no_off_machine  result == degraded (off_machine_copies 0)  result == ok
   no_off_site     result ok/degraded and off_site_copies 0   result ok/degraded and off_site_copies > 0
   pi_corruption   a Pi integrity check found a mismatch      a later Pi integrity check is clean
+  no_signal_data  result ok/degraded, signal_included false  result ok/degraded, signal_included true
 
 A condition that this run could not evaluate (a failed run says nothing about
 B2; a run without an integrity check says nothing about the Pi's old files)
@@ -22,7 +23,9 @@ leaves its task alone in both directions.
 
 no_off_site is deliberately independent of result. Downgrading result to
 degraded on a B2 outage would skip remote pruning, so one broken destination
-would quietly turn into unbounded growth on the Pi.
+would quietly turn into unbounded growth on the Pi. no_signal_data follows
+the same rule: the database backup is good without the Signal data, and
+degraded would also raise a false no_off_machine.
 
 Usage (PA_DATABASE_URL in the environment):
   backup_alerts.py --result ok --off-site-copies 1 --pi-integrity not_run \\
@@ -82,10 +85,22 @@ ALERTS = {
               "Importance 4, not 5: the local copy and B2 are both independently "
               "verified, but an SD card that corrupts one file may corrupt more.",
     ),
+    "no_signal_data": dict(
+        title="Backup is missing the Signal account data",
+        importance=3, effort_minutes=15, energy="low",
+        contexts=["computer"],
+        notes="Written automatically by scripts/backup.sh. The database backup "
+              "is verified and shipped, but signal-cli-data.tar.gz is not in it "
+              f"(signal_included false in {STATUS_FILE}; the journal says why: "
+              "container would not stop, directory missing, or tar failed). "
+              "Without it, losing the server means re-registering the bot's "
+              "number. Also check the signal-cli-rest-api container is running.",
+    ),
 }
 
 
-def decide(result: str, off_site_copies: int, pi_integrity: str) -> tuple[set[str], set[str]]:
+def decide(result: str, off_site_copies: int, pi_integrity: str,
+           signal_included: str = "unknown") -> tuple[set[str], set[str]]:
     """Return (markers to raise, markers to close) for one run's outcome."""
     trustworthy = result in ("ok", "degraded")
     raise_, close = set(), set()
@@ -108,6 +123,11 @@ def decide(result: str, off_site_copies: int, pi_integrity: str) -> tuple[set[st
     elif pi_integrity == "ok":
         close.add("pi_corruption")
 
+    if trustworthy and signal_included == "false":
+        raise_.add("no_signal_data")
+    elif trustworthy and signal_included == "true":
+        close.add("no_signal_data")
+
     return raise_, close
 
 
@@ -121,9 +141,13 @@ def main() -> int:
                     help="newline-separated sha256sum failure lines, for the task notes")
     ap.add_argument("--run-started", required=True)
     ap.add_argument("--git-head", required=True)
+    ap.add_argument("--signal-included", default="unknown",
+                    choices=["true", "false", "unknown"],
+                    help="whether the bundle has signal-cli-data.tar.gz; unknown = no bundle was built")
     args = ap.parse_args()
 
-    to_raise, to_close = decide(args.result, args.off_site_copies, args.pi_integrity)
+    to_raise, to_close = decide(args.result, args.off_site_copies, args.pi_integrity,
+                                args.signal_included)
     run = f"run {args.run_started} (git {args.git_head})"
 
     db = get_db()

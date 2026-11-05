@@ -90,8 +90,12 @@ fi
 # 3. Work in a scratch dir that dies with this process, whatever happens.
 # ---------------------------------------------------------------------------
 WORK="$(mktemp -d /tmp/futile-pa-backup.XXXXXX)"
-cleanup() { rm -rf "$WORK"; }
+SIGNAL_STOPPED=0
+# signal_restart is in the trap so that no exit path -- set -e, a signal,
+# a failed tar -- can leave the Signal bot stopped (see section 6b).
+cleanup() { signal_restart; rm -rf "$WORK"; }
 trap cleanup EXIT
+trap 'exit 143' TERM INT HUP   # route signals through the EXIT trap
 
 RESULT="ok"
 ERROR_MSG="null"
@@ -117,6 +121,64 @@ fail() {
 # for "nothing trustworthy exists" (see fail() above).
 dest_error() {
     echo "backup.sh: $1" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Signal account data (used in 6b). The bot's whole Signal identity lives in
+# this bind-mounted directory: losing it means re-registering the number,
+# and without the PIN, a 7-day registration lock.
+#
+# RESTORE IS FOR DISASTER RECOVERY ONLY -- NEVER FOR CLONING. Restoring this
+# directory onto a second machine while the original still runs puts two
+# processes on one Signal account with divergent session state, which Signal
+# will break, possibly taking the account with it. The annual restore drill
+# (recurrence 8, February) must restore the database WITHOUT restoring this
+# directory.
+#
+# Copied cold: signal-cli writes session state continuously, and a hot copy
+# can catch a torn write -- an archive that looks fine and will not restore.
+# So the container is stopped for the few seconds the tar takes, and
+# signal_restart runs on every path out, including the EXIT trap.
+# ---------------------------------------------------------------------------
+SIGNAL_DIR="/home/dremon/.signal-cli-rest-api"
+SIGNAL_CONTAINER="signal-cli-rest-api"
+SIGNAL_INCLUDED="false"
+SIGNAL_BYTES=0
+
+signal_restart() {
+    [[ "$SIGNAL_STOPPED" == "1" ]] || return 0
+    SIGNAL_STOPPED=0
+    if ! docker start "$SIGNAL_CONTAINER" >/dev/null 2>&1; then
+        echo "backup.sh: FAILED to restart $SIGNAL_CONTAINER — the Signal bot is down" >&2
+    fi
+}
+
+# Writes the tarball into $1. Only stops a container that was running, and
+# only restarts what it stopped: a container someone stopped deliberately
+# stays stopped (and is already quiescent, so a cold copy needs no stop).
+copy_signal_data() {
+    local out="$1/signal-cli-data.tar.gz"
+    if [[ ! -d "$SIGNAL_DIR" ]]; then
+        dest_error "Signal data directory missing — bundle has no Signal account data"
+        return 0
+    fi
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$SIGNAL_CONTAINER" 2>/dev/null)" == "true" ]]; then
+        if docker stop "$SIGNAL_CONTAINER" >/dev/null 2>&1; then
+            SIGNAL_STOPPED=1
+        else
+            dest_error "could not stop $SIGNAL_CONTAINER — Signal data not copied (a hot copy can tear)"
+            return 0
+        fi
+    fi
+    # Exit status only, never tar's output: file names inside are the account.
+    if tar -czf "$out" -C "$(dirname "$SIGNAL_DIR")" "$(basename "$SIGNAL_DIR")" 2>/dev/null; then
+        SIGNAL_INCLUDED="true"
+        SIGNAL_BYTES="$(stat -c%s "$out")"
+    else
+        rm -f "$out"
+        dest_error "Signal data tar failed — bundle has no Signal account data"
+    fi
+    signal_restart
 }
 
 # ---------------------------------------------------------------------------
@@ -221,15 +283,31 @@ if [[ "$RESULT" == "ok" ]]; then
         echo "backup.sh: pg_dumpall --globals-only failed — bundle has no role definitions" >&2
     fi
 
+    # 6b. Signal account data, inside the bundle so it is age-encrypted with
+    # everything else. A failure here is recorded (signal_included false, and
+    # the no_signal_data alert) without touching RESULT -- the same reasoning
+    # as no_off_site and globals.sql: the database backup is still good, and
+    # degrading the run would raise a false no_off_machine alert and stop
+    # pruning on the Pi.
+    copy_signal_data "$BUNDLE"
+
     git -C "$REPO_ROOT" rev-parse HEAD > "$BUNDLE/git-head.txt" 2>/dev/null \
         || echo "unknown" > "$BUNDLE/git-head.txt"
 
+    # The tar goes to a file first (not a pipe) so its listing can be taken
+    # from the exact bytes age encrypts: the status file then records what
+    # the archive contains, checkable without the private key.
     ENCRYPTED_FILE="$WORK/futile-pa-$STAMP.tar.age"
-    if ! tar -C "$WORK" -cf - "bundle" \
-        | age -r "$PA_BACKUP_AGE_RECIPIENT" -o "$ENCRYPTED_FILE"; then
+    BUNDLE_TAR="$WORK/bundle.tar"
+    if tar -C "$WORK" -cf "$BUNDLE_TAR" "bundle" \
+        && tar -tvf "$BUNDLE_TAR" > "$WORK/bundle-listing.txt" \
+        && age -r "$PA_BACKUP_AGE_RECIPIENT" -o "$ENCRYPTED_FILE" "$BUNDLE_TAR"; then
+        :
+    else
         fail "tar/age encryption failed"
         ENCRYPTED_FILE=""
     fi
+    rm -f "$BUNDLE_TAR"
 fi
 
 # Every Postgres client call is above this line. Nothing below needs the
@@ -523,6 +601,8 @@ cat > "$TMP_STATUS" <<EOF
   "off_machine_copies": $OFF_MACHINE_COPIES,
   "off_site_copies": $OFF_SITE_COPIES,
   "roles_included": $ROLES_INCLUDED,
+  "signal_included": $SIGNAL_INCLUDED,
+  "signal_bytes": $SIGNAL_BYTES,
   "destinations": { "local": "$DEST_LOCAL", "vocalassistant": "$DEST_PI", "b2": "$DEST_B2" },
   "error": $ERROR_MSG
 }
@@ -539,10 +619,20 @@ EOF
 # is the outcome of the last attempt: ok, mismatch, or skipped (due, but the
 # Pi couldn't be reached).
 python3 - "$TMP_STATUS" "$STATUS_FILE" "$PI_INTEGRITY" "$NOW" \
-    "$PI_INTEGRITY_FILES" "$PI_INTEGRITY_OUT" <<'PYEOF' || true
+    "$PI_INTEGRITY_FILES" "$PI_INTEGRITY_OUT" "$WORK/bundle-listing.txt" <<'PYEOF' || true
 import json, os, sys
-tmp, status_file, pi, now, pi_files, pi_out = sys.argv[1:]
+tmp, status_file, pi, now, pi_files, pi_out, listing = sys.argv[1:]
 d = json.load(open(tmp))
+# bundle_contents: path -> bytes, from `tar -tv` of the exact tar that was
+# encrypted. Names only (they are fixed), never contents. null if this run
+# built no archive.
+contents = {}
+if os.path.exists(listing):
+    for line in open(listing):
+        parts = line.split()
+        if len(parts) >= 6 and not parts[0].startswith('d'):
+            contents[parts[5]] = int(parts[2])
+d['bundle_contents'] = contents or None
 prev = json.load(open(status_file)) if os.path.exists(status_file) else {}
 if d['last_success'] is None:
     d['last_success'] = prev.get('last_success')
@@ -576,9 +666,10 @@ PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" "$PA_PATH/scripts/backup_alert
     --result "$RESULT" --off-site-copies "$OFF_SITE_COPIES" \
     --pi-integrity "$PI_INTEGRITY" --pi-mismatches="$(cat "$PI_INTEGRITY_OUT")" \
     --run-started "$RUN_STARTED" --git-head "$GIT_HEAD" \
+    --signal-included "$( [[ -n "$ENCRYPTED_FILE" ]] && echo "$SIGNAL_INCLUDED" || echo unknown )" \
     || echo "backup.sh: backup_alerts.py failed — alert tasks not updated" >&2
 
-echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2 pi_integrity=$PI_INTEGRITY"
+echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED signal_included=$SIGNAL_INCLUDED signal_bytes=$SIGNAL_BYTES local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2 pi_integrity=$PI_INTEGRITY"
 
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
