@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from typing import Any
 STORE_PATH = Path.home() / ".personal-context" / "context.json"
 
 log = logging.getLogger("futile-assistant.context_store")
+_write_lock = threading.Lock()
 
 
 class CorruptStore(RuntimeError):
@@ -55,10 +57,16 @@ def set(category: str, key: str, value: Any) -> None:
     rather than catching and defaulting, which is the exact bug this guards
     against.
     """
-    data = _read_or_default()
-    data.setdefault("contexts", {}).setdefault(category, {})[key] = value
-    data.setdefault("meta", {"version": 1})["updated_at"] = _now()
-    _write(data)
+    # The read-modify-write must not interleave between threads: the Signal
+    # bridge stamps last_delivered_at seconds after a send, which is exactly
+    # when the scheduler thread writes last_run_at, and an interleaved pair
+    # silently loses one key (task 205). In-process only -- server.py is a
+    # separate process and is not covered by this.
+    with _write_lock:
+        data = _read_or_default()
+        data.setdefault("contexts", {}).setdefault(category, {})[key] = value
+        data.setdefault("meta", {"version": 1})["updated_at"] = _now()
+        _write(data)
 
 
 def _read_or_default() -> dict:

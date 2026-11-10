@@ -24,6 +24,8 @@ tasks and talks to Andre was the thing that had failed. So:
 
   marker               level  raised when                                 closed when
   checkin_stale        ALERT  last_run_at older than 10h, or unreadable   last_run_at fresh
+  delivery_stale       ALERT  last_delivered_at older than 10h, or        last_delivered_at fresh
+                              unreadable or absent (task 205)
   off_machine_reduced  WARN   result ok but off_machine_copies < 2        result ok with 2 copies
                               (result degraded/failed belongs to backup_alerts.py and is left alone)
 
@@ -84,6 +86,20 @@ ALERTS = {
               "The in-process watchdog may have raised its own task for the same "
               "condition; that is deliberate, two independent records.",
     ),
+    "delivery_stale": dict(
+        title="No message has reached Andre's phone recently (external watchdog)",
+        importance=5, effort_minutes=20, energy="medium",
+        contexts=["computer", "focus"],
+        notes="Written automatically by scripts/external_watchdog.py. "
+              "task_agent_watchdog.last_delivered_at -- stamped only when a Signal "
+              "delivery receipt from Andre's device reaches the bridge -- is older than "
+              "10h or absent. Every check-in run sends something (questions or the "
+              "heartbeat), so on a healthy day this refreshes four times. If last_run_at "
+              "is fresh, the agent is running and nothing is reaching him: check the "
+              "phone, the Signal account, and the bridge's 'Signal receive' journal "
+              "lines. Note the Signal alert for this travels the same channel, so the "
+              "task may be the only record that arrives.",
+    ),
     "off_machine_reduced": dict(
         title="Backup reached only one off-machine copy",
         importance=2, effort_minutes=10, energy="low",
@@ -106,28 +122,53 @@ def log(msg: str) -> None:
 # Verdicts: pure functions of their inputs, so they can be tested with
 # synthetic values without touching the real store.
 # ---------------------------------------------------------------------------
-def check_checkin(raw: object, now: datetime) -> tuple[str, str]:
+def _check_stamp(raw: object, now: datetime, field: str, stale: str, fresh: str) -> tuple[str, str]:
     """('ok' | 'alert', reason). Anything that is not positive proof of a
     recent success alerts: a watchdog that cannot read its input must say so,
     not go quiet."""
     if raw is MISSING_FILE:
-        return "alert", "the context store file is missing, so the agent's last run cannot be checked"
+        return "alert", f"the context store file is missing, so {field} cannot be checked"
     if raw is MISSING_KEY or raw in (None, ""):
-        return "alert", "the context store has no task_agent_watchdog.last_run_at"
+        return "alert", f"the context store has no task_agent_watchdog.{field}"
     try:
         stamp = datetime.fromisoformat(str(raw))
     except ValueError:
-        return "alert", "task_agent_watchdog.last_run_at is unparseable"
+        return "alert", f"task_agent_watchdog.{field} is unparseable"
     if stamp.tzinfo is None:
-        return "alert", "task_agent_watchdog.last_run_at has no timezone"
+        return "alert", f"task_agent_watchdog.{field} has no timezone"
     age = now - stamp
     if age < -FUTURE_TOLERANCE:
-        return "alert", (f"task_agent_watchdog.last_run_at is {(-age).total_seconds() / 3600:.1f}h "
+        return "alert", (f"task_agent_watchdog.{field} is {(-age).total_seconds() / 3600:.1f}h "
                          "in the future (clock or store wrong)")
     if age > CHECKIN_STALE_AFTER:
         last = stamp.astimezone(TZ).strftime("%a %H:%M ET")
-        return "alert", f"no check-in has completed for {age.total_seconds() / 3600:.1f}h (last success {last})"
-    return "ok", f"last check-in {max(age.total_seconds(), 0) / 3600:.1f}h ago"
+        return "alert", f"{stale} for {age.total_seconds() / 3600:.1f}h (last {last})"
+    return "ok", f"{fresh} {max(age.total_seconds(), 0) / 3600:.1f}h ago"
+
+
+def check_checkin(raw: object, now: datetime) -> tuple[str, str]:
+    return _check_stamp(raw, now, "last_run_at", "no check-in has completed", "last check-in")
+
+
+def check_delivered(raw: object, now: datetime) -> tuple[str, str]:
+    """last_delivered_at is stamped only by a delivery receipt from Andre's
+    device. Same 10h threshold and the same reasoning: every fire sends
+    something, so on a healthy night the newest receipt is the 19:48 one,
+    7h28m before the 03:16 backup. Absent alerts -- it is not 'fine'."""
+    return _check_stamp(raw, now, "last_delivered_at",
+                        "no message has reached Andre's phone", "last delivery receipt")
+
+
+def diagnose(run_level: str, delivered_level: str) -> str:
+    """The two assertions fail differently, and the combination says why."""
+    return {
+        ("ok", "ok"): "healthy",
+        ("alert", "alert"): "the agent is not running, and nothing is reaching Andre",
+        ("ok", "alert"): "the agent is running but nothing is reaching Andre's phone",
+        # Possible since the heartbeat: a failing check-in still sends a
+        # failure notice, and that notice gets a receipt.
+        ("alert", "ok"): "the agent's runs are failing, but its failure notices are reaching Andre",
+    }[(run_level, delivered_level)]
 
 
 def check_off_machine(status: object) -> tuple[str, str]:
@@ -149,6 +190,10 @@ def check_off_machine(status: object) -> tuple[str, str]:
 
 
 def read_last_run_at(path: str = CONTEXT_FILE) -> object:
+    return read_watchdog_field("last_run_at", path)
+
+
+def read_watchdog_field(key: str, path: str = CONTEXT_FILE) -> object:
     try:
         with open(path) as fh:
             data = json.load(fh)
@@ -157,9 +202,9 @@ def read_last_run_at(path: str = CONTEXT_FILE) -> object:
     except (OSError, ValueError):
         return "unreadable"  # check_checkin turns this into an unparseable alert
     entry = (data.get("contexts") or {}).get("task_agent_watchdog")
-    if not isinstance(entry, dict) or "last_run_at" not in entry:
+    if not isinstance(entry, dict) or key not in entry:
         return MISSING_KEY
-    return entry["last_run_at"]
+    return entry[key]
 
 
 def read_status(path: str = STATUS_FILE) -> object:
@@ -270,21 +315,30 @@ def record(raise_: set[str], close: set[str]) -> dict[str, int]:
     return ids
 
 
-def message(marker: str, reason: str, task_id: int | None, test: bool = False) -> str:
+def message(marker: str, reason: str, task_id: int | None, test: bool = False,
+            diagnosis: str = "") -> str:
     ref = f" Task #{task_id}." if task_id else ""
     tag = "[TEST — synthetic input] " if test else ""
+    why = f" Diagnosis: {diagnosis}." if diagnosis else ""
     if marker == "checkin_stale":
-        return (f"{tag}⚠️ futile-pa watchdog: {reason}. The service may still show as running; "
+        return (f"{tag}⚠️ futile-pa watchdog: {reason}.{why} The service may still show as running; "
                 f"check journalctl --user -u futile-assistant.service, then API credit.{ref}")
+    if marker == "delivery_stale":
+        return (f"{tag}⚠️ futile-pa watchdog: {reason}.{why} If you are reading this, the channel "
+                f"is back — check the phone was online and Signal is still registered.{ref}")
     return f"{tag}futile-pa watchdog (warning): {reason}. Is the Pi on?{ref}"
 
 
 def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
     now = datetime.now(timezone.utc)
+    ctx = context_file or CONTEXT_FILE
     verdicts = {
-        "checkin_stale": check_checkin(read_last_run_at(context_file or CONTEXT_FILE), now),
+        "checkin_stale": check_checkin(read_watchdog_field("last_run_at", ctx), now),
+        "delivery_stale": check_delivered(read_watchdog_field("last_delivered_at", ctx), now),
         "off_machine_reduced": check_off_machine(read_status()),
     }
+    diagnosis = diagnose(verdicts["checkin_stale"][0], verdicts["delivery_stale"][0])
+    log(f"diagnosis: {diagnosis}")
     raise_, close = set(), set()
     for marker, (level, reason) in verdicts.items():
         log(f"{marker}: {level} ({reason})")
@@ -303,7 +357,9 @@ def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
 
     for marker in sorted(raise_):
         ok, why = send(message(marker, verdicts[marker][1], ids.get(marker),
-                               test=context_file is not None), api_base)
+                               test=context_file is not None,
+                               diagnosis="" if marker == "off_machine_reduced" else diagnosis),
+                       api_base)
         log(f"{marker}: Signal alert {'sent' if ok else 'NOT sent (' + why + ')'}")
     if not raise_:
         log("all clear — nothing sent")
@@ -318,7 +374,7 @@ def main() -> int:
     ap.add_argument("--api-base", default=None,
                     help="override SIGNAL_API_BASE (testing the failure path)")
     ap.add_argument("--context-file", default=None,
-                    help="read last_run_at from this file instead of the real store (testing); "
+                    help="read last_run_at/last_delivered_at from this file instead of the real store (testing); "
                          "messages are then marked [TEST]")
     args = ap.parse_args()
     api_base = args.api_base or _env("SIGNAL_API_BASE") or "http://127.0.0.1:8080"

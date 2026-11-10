@@ -31,7 +31,7 @@ from typing import Any
 
 import requests
 
-from . import quickask
+from . import context_store, quickask
 from .sensitivity_filter import filter_outbound
 
 log = logging.getLogger("futile-assistant.signal")
@@ -89,7 +89,7 @@ def _call(label: str, method: str, url: str, **kwargs: Any) -> requests.Response
         raise SignalAPIError(f"{label}: {type(e).__name__}") from None
 
 
-def send(message: str) -> None:
+def send(message: str, *, record: bool = True) -> None:
     if not is_configured():
         log.info("Signal not configured yet (SIGNAL_OWN_NUMBER/SIGNAL_ALLOWED_SENDER unset) — not sending")
         return
@@ -98,8 +98,9 @@ def send(message: str) -> None:
           json={"message": text, "number": OWN_NUMBER, "recipients": [ALLOWED_SENDER]})
     # Only after _call() returns: a message that failed to send is not part
     # of the conversation. And the filtered text, because that is what Andre
-    # actually saw.
-    _append("assistant", text)
+    # actually saw. record=False is the heartbeat (see notify.send).
+    if record:
+        _append("assistant", text)
 
 
 def _append(role: str, content: str) -> list[dict[str, Any]]:
@@ -134,15 +135,73 @@ def _extract_text(envelope: dict[str, Any]) -> tuple[str | None, str | None]:
     """Returns (source_number, message_text), either of which may be None —
     receipts, typing indicators and read markers have no dataMessage.text
     and should be silently skipped, not treated as empty questions.
+    Tolerates any shape: the bridge polls every 3s, and one malformed
+    envelope must not cost the ones behind it.
     """
-    data = envelope.get("envelope", envelope)
+    data = envelope.get("envelope", envelope) if isinstance(envelope, dict) else None
+    if not isinstance(data, dict):
+        return None, None
     source = data.get("source") or data.get("sourceNumber")
-    text = (data.get("dataMessage") or {}).get("message")
-    return source, text
+    message = data.get("dataMessage")
+    text = message.get("message") if isinstance(message, dict) else None
+    return (source if isinstance(source, str) else None,
+            text if isinstance(text, str) else None)
+
+
+# ---------------------------------------------------------------------------
+# Delivery receipts (task 205). Signal sends one automatically when Andre's
+# device receives a message, and unlike read receipts he cannot switch them
+# off. Any delivery receipt from him stamps task_agent_watchdog.
+# last_delivered_at with *now*: proof that the channel to his phone was alive
+# when the receipt arrived, which external_watchdog.py checks nightly. It is
+# deliberately not matched to a specific send: it proves "a message from us
+# reached his device", not "this check-in was delivered".
+#
+# Only this thread, inside the long-running service, ever stamps it. A
+# separate process (checkin-once, signal-send) starts no bridge and never
+# sees a receipt, so a manual run cannot make the channel look alive.
+#
+# Observed shape (bbernhard/signal-cli-rest-api, MODE=normal, 2026-11-09):
+# envelope.receiptMessage = {when, isDelivery, isRead, isViewed, timestamps}.
+# ---------------------------------------------------------------------------
+DELIVERY_STAMP_MIN_SECONDS = 60   # a burst of receipts is one stamp, not N writes
+_delivery_lock = threading.Lock()
+_last_delivery_stamp: datetime | None = None
+
+
+def _is_delivery_receipt(envelope: Any) -> bool:
+    data = envelope.get("envelope", envelope) if isinstance(envelope, dict) else None
+    receipt = data.get("receiptMessage") if isinstance(data, dict) else None
+    return isinstance(receipt, dict) and receipt.get("isDelivery") is True
+
+
+def _stamp_delivered() -> None:
+    global _last_delivery_stamp
+    now = datetime.now(timezone.utc)
+    with _delivery_lock:
+        if (_last_delivery_stamp is not None
+                and (now - _last_delivery_stamp).total_seconds() < DELIVERY_STAMP_MIN_SECONDS):
+            return
+        _last_delivery_stamp = now
+    # Outside the lock: the store write is file I/O.
+    try:
+        context_store.set("task_agent_watchdog", "last_delivered_at", now.isoformat(timespec="seconds"))
+        # No sender, no message timestamp, no content -- a receipt is
+        # metadata about a conversation and is treated like content.
+        log.info("Delivery confirmed by receipt — last_delivered_at advanced")
+    except Exception as e:
+        with _delivery_lock:
+            _last_delivery_stamp = None   # let the next receipt try again
+        log.error("Could not record a delivery receipt (%s)", type(e).__name__)
 
 
 def _handle_incoming(envelope: dict[str, Any]) -> None:
     source, text = _extract_text(envelope)
+    if _is_delivery_receipt(envelope):
+        # Never a reply, never history, never "a message from Andre".
+        if source == ALLOWED_SENDER:
+            _stamp_delivered()
+        return
     if not text:
         return
     if source != ALLOWED_SENDER:
@@ -152,8 +211,9 @@ def _handle_incoming(envelope: dict[str, Any]) -> None:
     snapshot = _append("user", text)
     try:
         reply = quickask.ask_with_history(snapshot)
-    except Exception:
-        log.exception("On-demand reply failed")
+    except Exception as e:
+        # Class name only: model and tool errors can carry task content.
+        log.error("On-demand reply failed (%s)", type(e).__name__)
         reply = "Something went wrong on my end — try again in a moment."
     # send() records the reply — appending it here too would double it.
     send(reply)
@@ -169,8 +229,14 @@ def run_bridge() -> None:
     failing = False
     while True:
         try:
-            for envelope in _receive():
-                _handle_incoming(envelope)
+            envelopes = _receive()
+            for envelope in envelopes if isinstance(envelopes, list) else []:
+                # Per envelope, so one that raises can't drop the rest of
+                # the batch -- they are already consumed from the container.
+                try:
+                    _handle_incoming(envelope)
+                except Exception as e:
+                    log.error("Signal envelope handling error: %s", type(e).__name__)
             if failing:
                 log.info("Signal receive recovered")
                 failing = False

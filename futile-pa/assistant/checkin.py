@@ -7,9 +7,13 @@ ran from Claude Desktop or the claude.ai Project before it.
 """
 from __future__ import annotations
 
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from pa.db import get_db
 
 from . import agent_loop, notify, toolset
 
@@ -36,6 +40,21 @@ RUN_PROMPT = (
     "own thinking, not in the reply text."
 )
 
+# Appended to RUN_PROMPT when the previous check-in's output never left the
+# machine. The model records asked_recently/open_questions during the run,
+# before the send, so without this a failed send would mark questions as
+# asked that Andre never saw, and the 24-hour rule would then suppress them.
+UNDELIVERED_NOTE = (
+    "\n\nIMPORTANT: the check-in output you produced at {since} was NOT "
+    "delivered to Andre (the Signal send failed). Any questions that run "
+    "recorded in task_agent.asked_recently or open_questions were never seen "
+    "by him. Treat them as not asked: correct those entries, and ask them "
+    "again in this run if they are still relevant."
+)
+
+TZ = ZoneInfo("America/New_York")
+BACKUP_STATUS = Path.home() / ".personal-context" / "backup-status.json"
+
 
 def run_once() -> str:
     """Run one check-in cycle and return the agent's report text.
@@ -58,26 +77,92 @@ def run_once() -> str:
         "exactly — it is authoritative over anything else in this prompt.\n\n"
         f"{brief}"
     )
-    reply = agent_loop.run(system_prompt, RUN_PROMPT, toolset.ALL_TOOLS, toolset.dispatch)
+    undelivered = toolset.dispatch("get_context", {"category": WATCHDOG_CATEGORY}).get("undelivered_since")
+    prompt = RUN_PROMPT + (UNDELIVERED_NOTE.format(since=undelivered) if undelivered else "")
+    try:
+        reply = agent_loop.run(system_prompt, prompt, toolset.ALL_TOOLS, toolset.dispatch)
+    except Exception as e:
+        # The heartbeat must not die with the API (the 11-06 outage was a
+        # credit error). Composed in code, class name only, then re-raised so
+        # last_run_at does not advance and the scheduler still logs it.
+        sent = notify.send(_failure_line(type(e).__name__), record=False)
+        log.error("Check-in failed (%s) — failure notice %s", type(e).__name__,
+                  "sent" if sent else "NOT delivered")
+        raise
 
-    # Logged unconditionally, not just on the notify path — the fix-2 deploy
-    # found a real gap: a quiet run leaves no evidence of whether it genuinely
-    # decided there was nothing to do, or produced something that got dropped
-    # before reaching the log. This line is the positive control either way.
+    # Logged unconditionally — the fix-2 deploy found a real gap: a quiet run
+    # leaves no evidence of whether it genuinely decided there was nothing to
+    # do, or produced something that got dropped before reaching the log.
     suppressed = _is_nothing_to_record(reply)
-    log.info("Check-in complete — %s",
-              "suppressed (nothing to record)" if suppressed else "produced output, sending to notify")
     log.info("Check-in reply in full:\n%s", reply)
 
-    if reply.strip() and not suppressed:
-        notify.send(reply)
+    # Every run sends something (the heartbeat): the questions if there are
+    # any, otherwise one line composed from the database with no model call.
+    # The heartbeat stays out of the bridge's conversation history.
+    if not suppressed:
+        delivered = notify.send(reply)
+        outcome = "questions sent" if delivered else "questions NOT delivered (Signal send failed)"
+    else:
+        delivered = notify.send(heartbeat_line(), record=False)
+        outcome = ("nothing to ask, heartbeat sent" if delivered
+                   else "nothing to ask, heartbeat NOT delivered (Signal send failed)")
+    # "Sent" means signal-cli accepted it. Reaching Andre's phone is proven
+    # only by a delivery receipt (signal_bridge -> last_delivered_at).
+    log.info("Check-in complete — %s", outcome)
 
+    if not suppressed and not delivered and not undelivered:
+        toolset.dispatch("set_context", {"category": WATCHDOG_CATEGORY, "key": "undelivered_since",
+                                         "value": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    elif delivered and undelivered:
+        # This run was told, and its own output reached signal-cli.
+        toolset.dispatch("set_context", {"category": WATCHDOG_CATEGORY, "key": "undelivered_since",
+                                         "value": None})
+
+    # Meaning unchanged (external_watchdog.py asserts on it): the run
+    # completed, whether or not its message was delivered.
     toolset.dispatch("set_context", {
         "category": WATCHDOG_CATEGORY,
         "key": "last_run_at",
         "value": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     return reply
+
+
+def heartbeat_line(now: datetime | None = None) -> str:
+    """One line, no model call, carrying counts that move — so a stub that
+    always says "all fine" would be caught. Visibly not a question."""
+    now = now or datetime.now(timezone.utc)
+    hhmm = now.astimezone(TZ).strftime("%H:%M")
+    try:
+        r = get_db().row("""select count(*) as open,
+                                   count(*) filter (where due_on = current_date) as due,
+                                   count(*) filter (where due_on < current_date) as overdue
+                              from pa.task where status not in ('done', 'dropped')""")
+        counts = f"{r['open']} open, {r['due']} due today, {r['overdue']} overdue"
+    except Exception as e:
+        counts = f"task counts unavailable: {type(e).__name__}"
+    return (f"✓ futile-pa {hhmm} — nothing needs you right now. {counts}; "
+            f"backup {_backup_state(now)}. No reply needed.")
+
+
+def _failure_line(error_class: str, now: datetime | None = None) -> str:
+    hhmm = (now or datetime.now(timezone.utc)).astimezone(TZ).strftime("%H:%M")
+    return (f"⚠️ futile-pa {hhmm} — the check-in failed ({error_class}), so I couldn't "
+            f"look at your tasks. Check journalctl --user -u futile-assistant.service. "
+            f"No reply needed.")
+
+
+def _backup_state(now: datetime) -> str:
+    try:
+        d = json.loads(BACKUP_STATUS.read_text(encoding="utf-8"))
+        last = datetime.fromisoformat(d["last_success"])
+    except Exception:
+        return "status unreadable"
+    if now - last > timedelta(hours=30):
+        return f"STALE, last ok {last.astimezone(TZ).strftime('%a %H:%M')}"
+    if d.get("result") != "ok":
+        return str(d.get("result"))
+    return "ok" if d.get("off_machine_copies", 0) >= 2 else f"ok, {d.get('off_machine_copies')} of 2 off-machine"
 
 
 def _is_nothing_to_record(reply: str) -> bool:
