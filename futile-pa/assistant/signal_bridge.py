@@ -151,8 +151,8 @@ def _extract_text(envelope: dict[str, Any]) -> tuple[str | None, str | None]:
 # ---------------------------------------------------------------------------
 # Delivery receipts (task 205). Signal sends one automatically when Andre's
 # device receives a message, and unlike read receipts he cannot switch them
-# off. Any delivery receipt from him stamps task_agent_watchdog.
-# last_delivered_at with *now*: proof that the channel to his phone was alive
+# off. A delivery receipt from his primary device (PRIMARY_DEVICE, below)
+# stamps task_agent_watchdog.last_delivered_at with *now*: proof that the channel to his phone was alive
 # when the receipt arrived, which external_watchdog.py checks nightly. It is
 # deliberately not matched to a specific send: it proves "a message from us
 # reached his device", not "this check-in was delivered".
@@ -173,6 +173,28 @@ def _is_delivery_receipt(envelope: Any) -> bool:
     data = envelope.get("envelope", envelope) if isinstance(envelope, dict) else None
     receipt = data.get("receiptMessage") if isinstance(data, dict) else None
     return isinstance(receipt, dict) and receipt.get("isDelivery") is True
+
+
+# Only the primary device proves delivery (2026-11-09, Andre's decision): a
+# linked Signal Desktop left running would acknowledge messages while the
+# phone is dead, and last_delivered_at would report a healthy channel to a
+# phone receiving nothing. Device 1 is always the primary, including after a
+# re-registration or a new handset.
+PRIMARY_DEVICE = 1
+
+
+def _source_device(envelope: Any) -> int | None:
+    """sourceDevice as an int, or None for any shape that isn't one. Tolerates
+    a numeric string; a bool is not a device (True == 1 in Python)."""
+    data = envelope.get("envelope", envelope) if isinstance(envelope, dict) else None
+    device = data.get("sourceDevice") if isinstance(data, dict) else None
+    if isinstance(device, bool):
+        return None
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str) and device.strip().isdigit():
+        return int(device.strip())
+    return None
 
 
 def _stamp_delivered() -> None:
@@ -200,7 +222,16 @@ def _handle_incoming(envelope: dict[str, Any]) -> None:
     if _is_delivery_receipt(envelope):
         # Never a reply, never history, never "a message from Andre".
         if source == ALLOWED_SENDER:
-            _stamp_delivered()
+            device = _source_device(envelope)
+            if device == PRIMARY_DEVICE:
+                _stamp_delivered()
+            elif device is None:
+                # Not counted, but not silent: if this image stops sending
+                # sourceDevice, every receipt lands here and the nightly
+                # delivery_stale alert follows. This line says why.
+                log.warning("Delivery receipt without a usable sourceDevice — not counted as delivery")
+            # A linked device (2, 3, ...) is real but proves nothing about
+            # the phone: ignored without a log line.
         return
     if not text:
         return
