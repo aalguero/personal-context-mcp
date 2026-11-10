@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -45,8 +46,16 @@ OWN_NUMBER = os.environ.get("SIGNAL_OWN_NUMBER", "")
 ALLOWED_SENDER = os.environ.get("SIGNAL_ALLOWED_SENDER", "")
 POLL_SECONDS = 3
 
+# Every message that actually reached Andre, in both directions — including
+# scheduled check-ins sent from the scheduler thread, so a reply to one has
+# the question it answers. In memory only (task 197): a restart loses
+# continuity, but every question carries its task id, so not correctness.
+# Written by the bridge thread and the scheduler thread; _history_lock guards
+# every read-modify-write of _history and _last_message_at, and is never held
+# across a model call or an HTTP call.
 _history: list[dict[str, Any]] = []
-_history_started_at = datetime.now(timezone.utc)
+_last_message_at = datetime.now(timezone.utc)
+_history_lock = threading.Lock()
 
 
 def is_configured() -> bool:
@@ -54,6 +63,10 @@ def is_configured() -> bool:
 
 
 def _memory_reset_hours() -> float:
+    # The conversation resets after this many hours of *silence* — measured
+    # from the last message in either direction, not from when the
+    # conversation began. (Before task 197 it was time since start, which
+    # could delete a check-in question minutes before Andre answered it.)
     # Read fresh on every check, not cached at import time — Andre asked
     # specifically for this to be adjustable without a deploy.
     return float(os.environ.get("SIGNAL_MEMORY_RESET_HOURS", "24"))
@@ -83,6 +96,23 @@ def send(message: str) -> None:
     text = filter_outbound(message)
     _call("send", "POST", f"{API_BASE}/v2/send",
           json={"message": text, "number": OWN_NUMBER, "recipients": [ALLOWED_SENDER]})
+    # Only after _call() returns: a message that failed to send is not part
+    # of the conversation. And the filtered text, because that is what Andre
+    # actually saw.
+    _append("assistant", text)
+
+
+def _append(role: str, content: str) -> list[dict[str, Any]]:
+    """Add one turn and return a snapshot copy for the caller to read
+    outside the lock. Resets first if the conversation has gone quiet, so a
+    check-in after a day's silence starts a fresh conversation rather than
+    reviving yesterday's."""
+    global _last_message_at
+    with _history_lock:
+        _reset_memory_if_due()
+        _history.append({"role": role, "content": content})
+        _last_message_at = datetime.now(timezone.utc)
+        return list(_history)
 
 
 def _receive() -> list[dict[str, Any]]:
@@ -90,13 +120,14 @@ def _receive() -> list[dict[str, Any]]:
 
 
 def _reset_memory_if_due() -> None:
-    global _history, _history_started_at
-    age_hours = (datetime.now(timezone.utc) - _history_started_at).total_seconds() / 3600
-    if age_hours >= _memory_reset_hours():
-        log.info("Conversation memory reset (%.1fh elapsed, threshold %.1fh)",
-                  age_hours, _memory_reset_hours())
-        _history = []
-        _history_started_at = datetime.now(timezone.utc)
+    # Caller holds _history_lock.
+    global _last_message_at
+    idle_hours = (datetime.now(timezone.utc) - _last_message_at).total_seconds() / 3600
+    if _history and idle_hours >= _memory_reset_hours():
+        log.info("Conversation memory reset (%.1fh idle, threshold %.1fh)",
+                 idle_hours, _memory_reset_hours())
+        _history.clear()
+        _last_message_at = datetime.now(timezone.utc)
 
 
 def _extract_text(envelope: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -118,14 +149,13 @@ def _handle_incoming(envelope: dict[str, Any]) -> None:
         log.warning("Ignored a message from a non-allowed sender")
         return
 
-    _reset_memory_if_due()
-    _history.append({"role": "user", "content": text})
+    snapshot = _append("user", text)
     try:
-        reply = quickask.ask_with_history(_history)
+        reply = quickask.ask_with_history(snapshot)
     except Exception:
         log.exception("On-demand reply failed")
         reply = "Something went wrong on my end — try again in a moment."
-    _history.append({"role": "assistant", "content": reply})
+    # send() records the reply — appending it here too would double it.
     send(reply)
 
 
