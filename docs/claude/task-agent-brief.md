@@ -114,9 +114,10 @@ Eligible, in priority order:
 - A task he answered about in the last run.
 - Anything in Personal Assistant Build. That is not task maintenance.
 
-**How to ask.** Specific and closed, with an easy out:
+**How to ask.** Specific and closed, with an easy out, and **always carrying the
+task id**:
 
-> Cord 2 was due Sunday. Done / part of it / not yet / move the pace line?
+> Cord 3 of 7 (171) was due Sunday. Done / part of it / not yet / move the pace line?
 
 not
 
@@ -124,6 +125,25 @@ not
 
 Open-ended questions produce no answer or a vague one, and a vague answer is worse
 than no answer, because something gets written from it.
+
+**THE ID IS NOT DECORATION — added 2026-11-05.** When several questions go out
+together, the reply comes back as "1 done, 3 slipped" or "171 done". Only the second
+of those is safe. §6 already requires ids in the written report, for the stated reason
+that *ids are how anything gets corrected later*; the same argument applies to the
+question, and it was missed.
+
+The reason it matters here specifically: over Signal, outbound check-ins are **not**
+written into the bridge's conversation history (task 197), so the session handling the
+reply may have no record of what it asked. An id in the question survives that, and
+survives a service restart, and survives an answer that arrives two days later. A bare
+ordinal does not — it gets mapped to whatever seems plausible, which is how wrong rows
+get written confidently.
+
+So: every question names its task id, and where several go out at once, **number them
+by id rather than by position** — `171)` not `3)`. If a reply still arrives with bare
+ordinals and the history to resolve them is missing, **ask which task is meant rather
+than inferring it.** A question costs one message; a wrong write costs the data's
+trustworthiness.
 
 **Tone.** Andre's standing instruction is that he wants to be pushed, gently, and
 reminded why a thing is worth doing. One line of why, never a lecture, and never twice
