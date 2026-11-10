@@ -671,6 +671,25 @@ PA_DATABASE_URL="$PA_DATABASE_URL" "$VENV_PYTHON" "$PA_PATH/scripts/backup_alert
 
 echo "backup.sh: result=$RESULT verified=$VERIFIED off_machine_copies=$OFF_MACHINE_COPIES off_site_copies=$OFF_SITE_COPIES roles_included=$ROLES_INCLUDED signal_included=$SIGNAL_INCLUDED signal_bytes=$SIGNAL_BYTES local=$DEST_LOCAL vocalassistant=$DEST_PI b2=$DEST_B2 pi_integrity=$PI_INTEGRITY"
 
+# ---------------------------------------------------------------------------
+# 12. External watchdog (task 182): is the check-in agent actually completing
+#     runs, and did tonight keep both off-machine copies? Lives here because
+#     this is a different unit, timer and process from the assistant it
+#     watches, and it alerts by calling the Signal container directly. See
+#     external_watchdog.py for what it asserts and why.
+#
+#     Last, after everything the backup does -- including the status file it
+#     reads and copy_signal_data's container restart, which it waits on -- and
+#     it cannot change this run's outcome: RESULT is final above, the call is
+#     guarded with || so set -e never sees a failure, and timeout bounds it.
+#     Deleting this section changes nothing else in the script.
+# ---------------------------------------------------------------------------
+external_watchdog() {
+    PA_DATABASE_URL="$PA_DATABASE_URL" timeout 300 \
+        "$VENV_PYTHON" "$PA_PATH/scripts/external_watchdog.py"
+}
+external_watchdog || echo "backup.sh: external_watchdog.py exited $? — watchdog checks incomplete" >&2
+
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
 fi
