@@ -1,0 +1,9 @@
+[Unit]
+Description=futile-pa dead man's switch ping (proves only: powered on, timers running, network out)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The URL is read from .env inside the script, never passed here: argv is
+# visible in any process listing, and the URL can silence the alarm.
+ExecStart=/usr/bin/python3 -I /home/dremon/tools/personal-context-mcp/futile-pa/scripts/deadman_ping.py

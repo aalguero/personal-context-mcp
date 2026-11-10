@@ -690,6 +690,27 @@ external_watchdog() {
 }
 external_watchdog || echo "backup.sh: external_watchdog.py exited $? — watchdog checks incomplete" >&2
 
+# ---------------------------------------------------------------------------
+# 13. Backup dead man's switch (task 211): one ping to the external monitor,
+#     only when RESULT is ok, so a run that never happens -- the timer dead,
+#     the machine off -- lets a ~26h window lapse and the monitor emails
+#     Andre. external_watchdog.py cannot see that case: it runs inside this
+#     script. A run that happened and failed is not pinged: backup_alerts.py
+#     and the watchdog already own that, and a ping would report the wrong
+#     thing.
+#
+#     Same discipline as section 12: RESULT is final, the call is guarded with
+#     || so set -e never sees a failure, and timeout bounds it. The URL is
+#     read from .env inside the script, never passed on this command line.
+#     Deleting this section changes nothing else in the script.
+# ---------------------------------------------------------------------------
+if [[ "$RESULT" == "ok" ]]; then
+    timeout 30 "$VENV_PYTHON" -I "$PA_PATH/scripts/deadman_ping.py" --key BACKUP_PING_URL \
+        || echo "backup.sh: deadman_ping.py exited $? — backup ping not sent" >&2
+else
+    echo "backup.sh: deadman ping skipped (result=$RESULT)"
+fi
+
 if [[ "$RESULT" == "failed" ]]; then
     exit 1
 fi
