@@ -53,6 +53,9 @@ if not (Path(FUTILE_PA_PATH) / "pa").is_dir():
 sys.path.insert(0, FUTILE_PA_PATH)
 
 from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
+# Shopping tools are registered here and not in pa.tools, because the agent
+# imports pa.tools.TOOLS wholesale and must not gain them until phase 2.
+from pa.shop import SHOP_TOOLS, SHOP_TOOL_NAMES, dispatch as shop_dispatch
 from pa.db import Db, set_db
 
 # Streamable HTTP transport (bundled with mcp >= 1.0)
@@ -250,7 +253,7 @@ def build_server(store: ContextStore) -> Server:
             ),
         ] + [
             Tool(name=t["name"], description=t["description"], inputSchema=t["inputSchema"])
-            for t in PA_TOOLS
+            for t in PA_TOOLS + SHOP_TOOLS
         ]
 
     # ---- Tool handlers -----------------------------------------------------
@@ -261,8 +264,9 @@ def build_server(store: ContextStore) -> Server:
 
         if name.startswith("pa_"):
             args = {k: v for k, v in arguments.items() if v is not None}
+            run = shop_dispatch if name in SHOP_TOOL_NAMES else pa_dispatch
             return [TextContent(type="text", text=json.dumps(
-                pa_dispatch(name, args), ensure_ascii=False, indent=2, default=str))]
+                run(name, args), ensure_ascii=False, indent=2, default=str))]
 
         if name == "get_context":
             category = arguments.get("category")
