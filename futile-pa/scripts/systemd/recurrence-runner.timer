@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly recurrence runner, before the 03:15 backup (ordering is a nicety, not a requirement)
+
+[Timer]
+OnCalendar=*-*-* 03:00 America/New_York
+OnBootSec=5min
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -28,6 +28,17 @@ tasks and talks to Andre was the thing that had failed. So:
                               unreadable or absent (task 205)
   off_machine_reduced  WARN   result ok but off_machine_copies < 2        result ok with 2 copies
                               (result degraded/failed belongs to backup_alerts.py and is left alone)
+  recurrence_stale     ALERT  recurrence_runner.last_run_at older than    last_run_at fresh
+                              26h, or unreadable or absent (task 161)
+  recurrence_behind    WARN   the runner's own self-check found a series  self-check clean
+                              with an unspawned past occurrence (188)
+
+The two recurrence checks prove different things. recurrence_stale green means
+the runner's timer fired and pa.recurrence.run() returned -- nothing more.
+recurrence_behind green means that run's re-expansion found every active
+series current. Only the second says the tasks actually exist; it is skipped,
+not passed, while recurrence_stale alerts, since a stale self-check proves
+nothing about tonight.
 
 Never logs or sends a phone number, a key, or a message body. Errors are a
 class name or an HTTP status.
@@ -65,6 +76,11 @@ TZ = ZoneInfo("America/New_York")
 # the same night. Not the in-process 6h: that is right on a 4-hour cadence and
 # would alarm here every single night.
 CHECKIN_STALE_AFTER = timedelta(hours=10)
+# recurrence_runner.py is nightly at 03:00 (+5min jitter) and this runs at
+# 03:15-03:30 (+15min jitter); the ordering is a nicety, not a requirement. 26h
+# is one night plus both jitters, so either order is fine; 24h would be a coin
+# flip on a night the runner fires late and the backup early.
+RECURRENCE_STALE_AFTER = timedelta(hours=26)
 # A stamp slightly ahead of this clock is skew; far ahead means the clock or
 # the store is wrong, and a stamp from the future proves nothing about today.
 FUTURE_TOLERANCE = timedelta(minutes=10)
@@ -111,6 +127,29 @@ ALERTS = {
               "an outage. If this fires most nights, that is a conversation to have, "
               "not a threshold to raise.",
     ),
+    "recurrence_stale": dict(
+        title="Recurrence runner has stopped completing runs (external watchdog)",
+        importance=4, effort_minutes=20, energy="medium",
+        contexts=["computer", "focus"],
+        notes="Written automatically by scripts/external_watchdog.py. "
+              "recurrence_runner.last_run_at -- written only by a successful run of "
+              "scripts/recurrence_runner.py -- is older than 26h or absent, so no recurring "
+              "task has been created since. Start with systemctl --user list-timers and "
+              "journalctl --user -u recurrence-runner.service. Missed occurrences are NOT "
+              "lost for a series that has spawned before: it resumes from last_spawned_for, "
+              "so check pa_recurrence_list before restarting it after a long gap.",
+    ),
+    "recurrence_behind": dict(
+        title="A recurring series has occurrences that were never created (external watchdog)",
+        importance=4, effort_minutes=30, energy="medium",
+        contexts=["computer", "focus"],
+        notes="Written automatically by scripts/external_watchdog.py. The recurrence "
+              "runner ran, but its own self-check found an active series with a past "
+              "occurrence that has no pa.task row (or a rule it cannot expand) -- a fault "
+              "in the engine or in the series definition, the shape of task 188. The "
+              "series ids are in recurrence_runner.last_check and the runner's journal "
+              "line. Use pa_recurrence_preview on each before changing anything.",
+    ),
 }
 
 
@@ -122,25 +161,27 @@ def log(msg: str) -> None:
 # Verdicts: pure functions of their inputs, so they can be tested with
 # synthetic values without touching the real store.
 # ---------------------------------------------------------------------------
-def _check_stamp(raw: object, now: datetime, field: str, stale: str, fresh: str) -> tuple[str, str]:
+def _check_stamp(raw: object, now: datetime, field: str, stale: str, fresh: str,
+                 category: str = "task_agent_watchdog",
+                 stale_after: timedelta = CHECKIN_STALE_AFTER) -> tuple[str, str]:
     """('ok' | 'alert', reason). Anything that is not positive proof of a
     recent success alerts: a watchdog that cannot read its input must say so,
     not go quiet."""
     if raw is MISSING_FILE:
         return "alert", f"the context store file is missing, so {field} cannot be checked"
     if raw is MISSING_KEY or raw in (None, ""):
-        return "alert", f"the context store has no task_agent_watchdog.{field}"
+        return "alert", f"the context store has no {category}.{field}"
     try:
         stamp = datetime.fromisoformat(str(raw))
     except ValueError:
-        return "alert", f"task_agent_watchdog.{field} is unparseable"
+        return "alert", f"{category}.{field} is unparseable"
     if stamp.tzinfo is None:
-        return "alert", f"task_agent_watchdog.{field} has no timezone"
+        return "alert", f"{category}.{field} has no timezone"
     age = now - stamp
     if age < -FUTURE_TOLERANCE:
-        return "alert", (f"task_agent_watchdog.{field} is {(-age).total_seconds() / 3600:.1f}h "
+        return "alert", (f"{category}.{field} is {(-age).total_seconds() / 3600:.1f}h "
                          "in the future (clock or store wrong)")
-    if age > CHECKIN_STALE_AFTER:
+    if age > stale_after:
         last = stamp.astimezone(TZ).strftime("%a %H:%M ET")
         return "alert", f"{stale} for {age.total_seconds() / 3600:.1f}h (last {last})"
     return "ok", f"{fresh} {max(age.total_seconds(), 0) / 3600:.1f}h ago"
@@ -171,6 +212,40 @@ def diagnose(run_level: str, delivered_level: str) -> str:
     }[(run_level, delivered_level)]
 
 
+def check_recurrence_run(raw: object, now: datetime) -> tuple[str, str]:
+    """recurrence_runner.last_run_at, written only by a successful run. Absent
+    alerts: the first-night case is avoided by running the runner once by hand
+    at install, not by treating 'never ran' as fine."""
+    return _check_stamp(raw, now, "last_run_at", "no recurrence run has completed",
+                        "last recurrence run", category="recurrence_runner",
+                        stale_after=RECURRENCE_STALE_AFTER)
+
+
+def check_recurrence_current(check: object, last_run_at: object, run_level: str) -> tuple[str, str]:
+    """('ok' | 'warn' | 'skip', reason) from the runner's own self-check.
+    skip while recurrence_stale alerts: an old self-check says nothing about
+    tonight, and one cause should not send two messages."""
+    if run_level != "ok":
+        return "skip", "no fresh run to judge (see recurrence_stale)"
+    if not isinstance(check, dict):
+        return "warn", "recurrence_runner.last_check is missing or unreadable"
+    if check.get("at") != last_run_at:
+        return "warn", "recurrence_runner.last_check is not from the latest run"
+    behind = list(check.get("behind") or []) + list(check.get("bad_rule") or [])
+    if behind:
+        return "warn", ("recurring series " + ", ".join(str(i) for i in behind)
+                        + " have past occurrences that were never created")
+    return "ok", f"every active series current as of {check.get('as_of')}"
+
+
+def diagnose_recurrence(run_level: str, current_level: str) -> str:
+    if run_level != "ok":
+        return "the recurrence runner has not completed a run"
+    if current_level != "ok":
+        return "the recurrence runner is running but some series are not being created"
+    return "recurrences current"
+
+
 def check_off_machine(status: object) -> tuple[str, str]:
     """('ok' | 'warn' | 'skip', reason). skip = not this check's business
     (degraded and failed runs are backup_alerts.py's)."""
@@ -193,7 +268,8 @@ def read_last_run_at(path: str = CONTEXT_FILE) -> object:
     return read_watchdog_field("last_run_at", path)
 
 
-def read_watchdog_field(key: str, path: str = CONTEXT_FILE) -> object:
+def read_watchdog_field(key: str, path: str = CONTEXT_FILE,
+                        category: str = "task_agent_watchdog") -> object:
     try:
         with open(path) as fh:
             data = json.load(fh)
@@ -201,7 +277,7 @@ def read_watchdog_field(key: str, path: str = CONTEXT_FILE) -> object:
         return MISSING_FILE
     except (OSError, ValueError):
         return "unreadable"  # check_checkin turns this into an unparseable alert
-    entry = (data.get("contexts") or {}).get("task_agent_watchdog")
+    entry = (data.get("contexts") or {}).get(category)
     if not isinstance(entry, dict) or key not in entry:
         return MISSING_KEY
     return entry[key]
@@ -326,6 +402,12 @@ def message(marker: str, reason: str, task_id: int | None, test: bool = False,
     if marker == "delivery_stale":
         return (f"{tag}⚠️ futile-pa watchdog: {reason}.{why} If you are reading this, the channel "
                 f"is back — check the phone was online and Signal is still registered.{ref}")
+    if marker == "recurrence_stale":
+        return (f"{tag}⚠️ futile-pa watchdog: {reason}.{why} No recurring task is being created; "
+                f"check journalctl --user -u recurrence-runner.service.{ref}")
+    if marker == "recurrence_behind":
+        return (f"{tag}futile-pa watchdog (warning): {reason}.{why} The runner ran but did not "
+                f"do its job; check pa_recurrence_preview for those series.{ref}")
     return f"{tag}futile-pa watchdog (warning): {reason}. Is the Pi on?{ref}"
 
 
@@ -337,8 +419,15 @@ def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
         "delivery_stale": check_delivered(read_watchdog_field("last_delivered_at", ctx), now),
         "off_machine_reduced": check_off_machine(read_status()),
     }
+    rec_run = read_watchdog_field("last_run_at", ctx, "recurrence_runner")
+    verdicts["recurrence_stale"] = check_recurrence_run(rec_run, now)
+    verdicts["recurrence_behind"] = check_recurrence_current(
+        read_watchdog_field("last_check", ctx, "recurrence_runner"), rec_run,
+        verdicts["recurrence_stale"][0])
     diagnosis = diagnose(verdicts["checkin_stale"][0], verdicts["delivery_stale"][0])
+    rec_diagnosis = diagnose_recurrence(verdicts["recurrence_stale"][0], verdicts["recurrence_behind"][0])
     log(f"diagnosis: {diagnosis}")
+    log(f"recurrence diagnosis: {rec_diagnosis}")
     raise_, close = set(), set()
     for marker, (level, reason) in verdicts.items():
         log(f"{marker}: {level} ({reason})")
@@ -356,9 +445,10 @@ def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
         log(f"recording tasks failed ({type(e).__name__}) — sending anyway")
 
     for marker in sorted(raise_):
+        diag = {"off_machine_reduced": "", "recurrence_stale": rec_diagnosis,
+                "recurrence_behind": rec_diagnosis}.get(marker, diagnosis)
         ok, why = send(message(marker, verdicts[marker][1], ids.get(marker),
-                               test=context_file is not None,
-                               diagnosis="" if marker == "off_machine_reduced" else diagnosis),
+                               test=context_file is not None, diagnosis=diag),
                        api_base)
         log(f"{marker}: Signal alert {'sent' if ok else 'NOT sent (' + why + ')'}")
     if not raise_:
@@ -374,7 +464,7 @@ def main() -> int:
     ap.add_argument("--api-base", default=None,
                     help="override SIGNAL_API_BASE (testing the failure path)")
     ap.add_argument("--context-file", default=None,
-                    help="read last_run_at/last_delivered_at from this file instead of the real store (testing); "
+                    help="read the watchdog and recurrence_runner stamps from this file instead of the real store (testing); "
                          "messages are then marked [TEST]")
     args = ap.parse_args()
     api_base = args.api_base or _env("SIGNAL_API_BASE") or "http://127.0.0.1:8080"

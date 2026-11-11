@@ -1,0 +1,9 @@
+[Unit]
+Description=futile-pa recurrence runner (creates due recurring tasks, then checks every series is current)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The DSN is read from .env inside the script (via the assistant package), never
+# passed here: argv is visible in any process listing.
+ExecStart=/home/dremon/tools/personal-context-mcp/.venv-new/bin/python -I /home/dremon/tools/personal-context-mcp/futile-pa/scripts/recurrence_runner.py
