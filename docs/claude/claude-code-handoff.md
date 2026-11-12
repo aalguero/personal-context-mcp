@@ -68,9 +68,9 @@ futile-pa/
     recurrence_runner.py      nightly 03:00
     deadman_ping.py           hourly
     backup_alerts.py, migrate.py, prune_backups.py
-    systemd/                  deadman-ping and recurrence-runner units, byte-identical
-                              to the installed copies. The MCP and backup units are
-                              not in git; the agent's is in assistant/systemd/
+    systemd/                  MCP, deadman-ping and recurrence-runner units,
+                              byte-identical to the installed copies. The backup unit
+                              is not in git; the agent's is in assistant/systemd/
   migrations/                 001_core, 002_reference_data, 003_situation_fit,
                               004_shopping, 005_overdue_and_defer,
                               006_deterministic_order

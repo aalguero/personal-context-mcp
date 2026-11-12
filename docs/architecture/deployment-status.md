@@ -71,7 +71,7 @@ is how a restore was independently verified.
 | Transport | streamable HTTP at `/mcp` only |
 | Public URL | `https://futileassistant.cormorant-barb.ts.net/mcp` via Tailscale Funnel (`/ → 127.0.0.1:8765`) |
 | Auth | shared secret, ASGI middleware, all paths, **404 on failure**, fail-closed at startup |
-| Bind | **`0.0.0.0:8765`, not `127.0.0.1`** — long-standing, LAN-reachable behind the token. Decision open: task 219. **Something relies on it:** the Claude Code connector on shadow (`~/.claude.json`, `personal-context`) points at `100.108.86.16:8765` directly over the tailnet, not at the Funnel URL. Found 2026-11-12 as two `GET /mcp` 404s from shadow at each MCP restart (that is the client reconnecting; tools work). Binding to localhost would cut that session off, so 219 must move it to the Funnel URL first |
+| Bind | **`127.0.0.1:8765` only**, since 2026-11-12 14:23 (task 219, Andre's decision). Every client goes through Funnel. Unit in git: `futile-pa/scripts/systemd/personal-context-mcp.service` (`785a99a`). Proved from shadow: tailnet and LAN direct went from 404 to connection refused; Funnel still answers. The Claude Code connector on shadow (`~/.claude.json`, `personal-context`) uses the Funnel URL; from shadow that hostname resolves to the tailnet address and reaches tailscaled on 443, which forwards to 127.0.0.1. **In the access log, port `0` means "arrived through tailscaled"** (`X-Forwarded-For` carries no port); a real port means a direct connection, which now can only be localhost |
 | Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed |
 | Migrations | **001–006 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004" is now **007** (task 218) |
 | Agent | fires 07:48 / 11:48 / 15:48 / 19:48 America/New_York. `main()` starts the Signal bridge as a daemon thread, then the scheduler |
@@ -394,13 +394,13 @@ snapshot below is 2026-11-12; `claude/claude-code-handoff.md` §10 has the full 
 
 **Highest value:**
 
-- **219** — decide the `0.0.0.0:8765` bind. Note the Claude Code connector on shadow
-  depends on it (Current state, Bind row).
-- **Found 11-12, no task yet:** the event log records the agent's edits as `actor=andre`
-  (noted in four reports now). And `repo._resolve`'s exact-name branch takes the first
-  of several same-named projects or people silently; only `slug` is unique, and there
-  are no duplicate names today, so it is latent. `task_list`'s non-default orderings
-  still have no id tie-break.
+- **228** — the event log records the agent's edits as `actor=andre`. **229** —
+  `repo._resolve`'s exact-name branch silently picks one of several same-named rows
+  (latent: no duplicate names today). **230** — `task_list`'s non-default orderings
+  have no id tie-break.
+- **231** — two other services on futileassistant answer on the LAN: an
+  unauthenticated uvicorn app on `:8000` (probably the album catalog) and Apache on
+  `:80`. Same question 219 settled for the MCP server; exposure is Andre's decision.
 - **221, 227** — two places where a protection does not apply as widely as its name
   suggests: `max_backfill_days`, and `hard_deadline` being enforced in one path of
   three.
