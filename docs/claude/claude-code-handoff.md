@@ -30,11 +30,12 @@ connector. That asymmetry is why briefs exist (§3).
 
 - **Remote:** `git@github.com:aalguero/personal-context-mcp.git` — SSH, private.
 - **Branch:** `main`. No PR workflow; commits go straight to main.
-- **Only futileassistant can push.** The chat sandbox has no key, and the device VM
-  that runs commands on shadow cannot reach `~/.ssh` (protected location), so
-  `git ls-remote` there fails with `Host key verification failed`. Andre pushes and
-  pulls from his own terminal; the server agent pushes from futileassistant.
-- **HEAD as of 2026-11-12:** `891c57a`, deployed.
+- **Who can push:** Andre, from his own terminal on shadow, and the server agent, from
+  futileassistant. The chat sandbox has no key, and the device VM that runs commands on
+  shadow cannot reach `~/.ssh` (protected location), so `git ls-remote` there fails
+  with `Host key verification failed`.
+- **HEAD:** `git log -1 origin/main` is the authority. What is *deployed* is recorded in
+  `architecture/deployment-status.md`, because a pushed commit is not a deployed one.
 
 **Layout** (server path `/home/dremon/tools/personal-context-mcp/`):
 
@@ -67,7 +68,9 @@ futile-pa/
     recurrence_runner.py      nightly 03:00
     deadman_ping.py           hourly
     backup_alerts.py, migrate.py, prune_backups.py
-    systemd/                  unit files, byte-identical to the installed copies
+    systemd/                  deadman-ping and recurrence-runner units, byte-identical
+                              to the installed copies. The MCP and backup units are
+                              not in git; the agent's is in assistant/systemd/
   migrations/                 001_core, 002_reference_data, 003_situation_fit,
                               004_shopping, 005_overdue_and_defer,
                               006_deterministic_order
@@ -127,7 +130,7 @@ The same shape in reverse, plus the convention that has made this work:
 Every report so far has found real errors in its brief. That is the point of the
 format, not a failure of it.
 
-## 4. The doctrine — read this twice
+## 4. The doctrine
 
 > **A change is not verified by the system still working. It is verified by proving it
 > controls something.**
@@ -283,9 +286,12 @@ one real date. Used for the seven cords of firewood and the garlic.
   behalf.** It cannot distinguish them; correlate by time against the journal.
 - **Importing the `assistant` package has side effects** — its `__init__` calls
   `load_dotenv()` and `set_db()`, which will silently swap a test's database handle.
-- **`filter_outbound` extracts task ids** from `(\d+)` and `task \d+`, and a hit on a
-  sensitive project redacts the whole line. Render `coffee — 2 lb`, never `coffee (2 lb)`.
-- **`context.json` has four writer processes** and only a per-process lock. Its `.1–.3`
+- **`filter_outbound` extracts task ids** with the pattern in `assistant/task_ids.py`
+  (`(171)`, `task 171`, and a line starting `171)`), and a hit on a sensitive project
+  redacts the whole line. Render `coffee — 2 lb`, never `coffee (2 lb)`.
+- **`context.json` is written by three processes through two implementations**
+  (`assistant/context_store.py` and `server.py`'s own `ContextStore`), each with only
+  a per-process lock (task 223). Its `.1–.3`
   rotations are written milliseconds apart by the same run, so they hold about one
   second of history and are not a recovery path.
 - **A journal read without permission returns an empty result, not a refusal.** An
@@ -296,41 +302,19 @@ one real date. Used for the seven cords of firewood and the garlic.
   returned zero hits for a secret sitting in a file it was pointed at. **Any search
   whose result is an absence uses `/usr/bin/grep`**, and has a positive control.
 
-## 10. The backlog, 2026-11-11
+## 10. The backlog
 
-Live source is the database. `claude/working-agreement.md` has the audit queries;
-project 18 is Build, area 37 is Operations.
+The database is the only backlog. Project 18 is Build and area 37 is Operations:
 
-**Totals:** 226 tasks, 127 open. 37 projects, 10 recurrences, 18 contexts, 9
-situations, 9 people, 9 goals. Migrations 001–006 applied.
+```sql
+select t.id, case t.project_id when 18 then 'Build' else 'Ops' end as stream,
+       t.importance, t.title
+  from pa.task t
+ where t.project_id in (18, 37) and t.status not in ('done', 'dropped')
+ order by t.importance desc, t.id;
+```
 
-| id | Stream | Imp | Title |
-|---|---|---|---|
-| 162 | Ops | 4 | Data cleanup needing SQL or a brief |
-| 169 | Ops | 4 | Retag for season and low energy |
-| 217 | Build | 4 | Until phase 2, asking the bot for a shopping list creates a task |
-| 219 | Ops | 4 | Decide: the MCP server listens on `0.0.0.0:8765` |
-| 221 | Build | 4 | `max_backfill_days` does not bound a series that has a stamp |
-| 227 | Build | 4 | A hard deadline can still be hidden by someday or the defer side doors |
-| 177 | Build | 3 | Suggestions offer parent tasks alongside their subtasks |
-| 206 | Build | 3 | The Signal conversation history grows without bound |
-| 207 | Build | 3 | An alarm of last resort for when Signal itself is the failure |
-| 209 | Ops | 3 | How the Signal container is run exists only in briefs |
-| 212 | Build | 3 | Shopping lists — phases 2 to 4 |
-| 218 | Ops | 3 | Renumber the unbuilt "Migration 004" spec to **007** (006 taken 11-11) |
-| 222 | Ops | 3 | `pa_recurrence_preview` lies about what the engine will do |
-| 223 | Build | 3 | `context.json` has four writers and a per-process lock |
-| 226 | Ops | 3 | Project health and `brief["soon"]` still compute overdue by hand |
-| 114 | Build | 2 | PiTower case code into git |
-| 123 | Build | 2 | Narrow the B2 key's capabilities |
-| 125 | Build | 2 | Three backup-alert refinements |
-| 183 | Build | 2 | `pa_task_update` has no `depends_on` |
-| 198 | Build | 2 | Signal hardening leftovers |
-
-**Closed 2026-11-11 → 12, with proof:** 196, 213.
-
-**Closed in the week of 2026-11-06, all with proof:** 124, 161, 178, 182, 184, 188,
-194, 195, 197, 199, 201, 204, 205, 211.
+`claude/working-agreement.md` has the audit queries.
 
 ## 11. What to read, in order
 

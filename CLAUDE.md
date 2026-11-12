@@ -1,9 +1,8 @@
 # futileMCP / futile-pa — orientation for Claude Code
 
-> **Rewritten 2026-11-11.** This file is now a pointer. The project's state, rules,
-> decisions and backlog live in **`docs/claude/claude-code-handoff.md`**, imported
-> below. This file holds only what differs for a **Claude Code session on shadow**.
-> Where the two disagree, the handoff is newer for project facts; this file is newer
+> The project's state, rules, decisions and backlog live in
+> **`docs/claude/claude-code-handoff.md`**, imported below. This file holds only what
+> differs for a **Claude Code session on shadow**. Where the two disagree, the handoff is newer for project facts; this file is newer
 > for facts about shadow. If either disagrees with what you observe, **trust what you
 > observe and say so.**
 
@@ -65,8 +64,8 @@ The handoff was written from the claude.ai chat side. For this session:
 
 Handoff §6 is the list, and it is copied into every brief. Two additions from this side:
 
-- **Applied migrations are 001–005** (as of 2026-11-11). Check `pa.schema_migration`
-  (keyed by filename) before assuming the next number.
+- **Which migrations are applied is a database fact, not a doc fact.** Read
+  `pa.schema_migration` (keyed by filename) before assuming the next number.
 - **Never create a recurrence**, and **in a Build session, never make a life write
   unless Andre asks** (working-agreement, *Three rules*). Noticing is not permission.
 

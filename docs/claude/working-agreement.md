@@ -107,8 +107,7 @@ from his Signal replies, or a breach of this agreement.
 **Reading it honestly — one caveat that matters.** `pa.event.actor` is `andre` for both
 his own edits and the agent's edits made on his behalf, so **actor cannot tell them
 apart.** Distinguish by time, against the Signal exchanges in
-`journalctl --user -u futile-assistant.service`. Fixing the actor field is a known,
-unticketed finding from 2026-11-09.
+`journalctl --user -u futile-assistant.service`. Fixing the actor field is task 228.
 
 ## The baseline, 2026-11-09
 
@@ -185,25 +184,6 @@ which is the difference between a convention and a wish. Suggested:
 > Keep three streams apart: my life, running the assistant (Personal Assistant
 > Operations), and building it (Personal Assistant Build). In a conversation about my
 > life, capture system faults as tasks and keep going — do not start debugging.
-
-## What changed in the data, 2026-10-23
-
-Created `Personal Assistant Operations` (id 37), kind **area**, under Learning & AI,
-importance 4, review cadence 7 days. An area because it never completes, and a review
-cadence because an ongoing responsibility without one is the thing that rots unnoticed
-— which is the whole lesson of task 156.
-
-Moved into Operations: **156** (backup failure alert), **162** (SQL data cleanup,
-8 items), **169** (context retagging).
-
-Moved into Build from Household Admin: **123** (narrow the B2 key), **124** (nothing
-notices a backup that never runs), **125** (three alert refinements).
-
-Left in Household Admin deliberately: **77** (enroll the backup YubiKey) — Andre's
-call. It is his identity, not the application's.
-
-Already in Build: **114** (PiTower case code into git), **161** (the recurrence engine
-has no nightly timer), **177** (suggestions offer parent tasks alongside their children).
 
 **Unverified and worth checking in the next Operations session:** whether
 `pa_daily_brief` actually surfaces `v_review_due`. The 7-day cadence on Operations is

@@ -402,3 +402,22 @@ All found during triage and the first fortnight of real use.
       completed occurrence's notes and be hunted for later. A small
       `recurrence_log` table, or a convention, would make the "turn judgement into
       arithmetic" idea actually work.
+
+## Stream reorganisation, 2026-10-23 (moved from claude/working-agreement.md)
+
+Created `Personal Assistant Operations` (id 37), kind **area**, under Learning & AI,
+importance 4, review cadence 7 days. An area because it never completes, and a review
+cadence because an ongoing responsibility without one is the thing that rots unnoticed
+— which is the whole lesson of task 156.
+
+Moved into Operations: **156** (backup failure alert), **162** (SQL data cleanup,
+8 items), **169** (context retagging).
+
+Moved into Build from Household Admin: **123** (narrow the B2 key), **124** (nothing
+notices a backup that never runs), **125** (three alert refinements).
+
+Left in Household Admin deliberately: **77** (enroll the backup YubiKey) — Andre's
+call. It is his identity, not the application's.
+
+Already in Build: **114** (PiTower case code into git), **161** (the recurrence engine
+has no nightly timer), **177** (suggestions offer parent tasks alongside their children).
