@@ -84,15 +84,13 @@ ALERTS = {
 
 def run_checks() -> None:
     """Run both checks. Each is independent; one failing (e.g. a bad status
-    file) must not block the other."""
-    try:
-        _check_backup()
-    except Exception:
-        log.exception("Backup staleness check failed")
-    try:
-        _check_checkin()
-    except Exception:
-        log.exception("Check-in staleness check failed")
+    file) must not block the other. Failures log the class name only, never
+    a traceback (hard rule 8; log.exception until 2026-11-12)."""
+    for label, check in (("Backup", _check_backup), ("Check-in", _check_checkin)):
+        try:
+            check()
+        except Exception as e:
+            log.error("%s staleness check failed (%s)", label, type(e).__name__)
 
 
 def _check_backup() -> None:

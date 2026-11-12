@@ -37,6 +37,20 @@ def _due(now: datetime) -> bool:
     return FIRE_MINUTE_BY_HOUR.get(now.hour) == now.minute
 
 
+def _guarded(label: str, fn) -> None:
+    """Run fn; on failure log the exception's class name and nothing else.
+
+    Not log.exception: a traceback carries the exception's message and the
+    frames' text, and a model or tool error can carry task content (hard
+    rule 8). Until 2026-11-12 this was log.exception. checkin.run_once
+    already logs its own failures by class before re-raising.
+    """
+    try:
+        fn()
+    except Exception as e:
+        log.error("%s failed (%s)", label, type(e).__name__)
+
+
 def run_scheduler() -> None:
     log.info("Scheduler starting — fires daily at %s America/New_York",
               [f"{h:02d}:{m:02d}" for h, m in sorted(FIRE_MINUTE_BY_HOUR.items())])
@@ -50,17 +64,11 @@ def run_scheduler() -> None:
         if _due(now) and marker != last_fired:
             last_fired = marker
             log.info("Firing check-in for %s", now.isoformat())
-            try:
-                checkin.run_once()
-            except Exception:
-                log.exception("Check-in run failed")
+            _guarded("Check-in run", checkin.run_once)
             # Runs regardless of whether checkin.run_once() raised above —
             # a check-in that fails every cycle should read as stale via the
             # watchdog too, not just leave a trail of exceptions in the log.
-            try:
-                watchdog.run_checks()
-            except Exception:
-                log.exception("Watchdog checks failed")
+            _guarded("Watchdog checks", watchdog.run_checks)
         time.sleep(POLL_SECONDS)
 
 

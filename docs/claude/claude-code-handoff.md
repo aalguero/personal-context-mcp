@@ -79,7 +79,7 @@ futile-pa/
   tests/test_shopping.py      95 checks, same guard
   tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
   tests/test_toolset.py       30 checks; which agent path holds the shop tools (212)
-  tests/test_agent_loop.py    9 checks, no DB; no model text or tool data reaches the log
+  tests/test_log_hygiene.py   27 checks, no DB; no model text, reply text or traceback reaches the journal
 docs/claude/task-agent-brief.md   the agent's own instructions — LIVE CONFIG, see §7
 docs/architecture/                design records
 CLAUDE.md                     repo-level orientation

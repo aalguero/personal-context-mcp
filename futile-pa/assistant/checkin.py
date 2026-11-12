@@ -17,6 +17,7 @@ from pa.db import get_db
 
 from . import agent_loop, ledger, notify, toolset
 from .sensitivity_filter import filter_outbound
+from .task_ids import extract_task_ids
 
 BRIEF_PATH = Path(__file__).resolve().parents[2] / "docs" / "claude" / "task-agent-brief.md"
 
@@ -100,8 +101,16 @@ def run_once() -> str:
     # Logged unconditionally — the fix-2 deploy found a real gap: a quiet run
     # leaves no evidence of whether it genuinely decided there was nothing to
     # do, or produced something that got dropped before reaching the log.
+    # The evidence is the shape, never the text: until 2026-11-12 this logged
+    # the whole reply, before filter_outbound, so a question about a task in
+    # a health, finance or estate project reached the journal unredacted
+    # four times a day (hard rule 8). Length, outcome and the task ids it
+    # cites (ids, not titles — the ledger logs the same) answer the fix-2
+    # question: did it decide nothing, or say something that went missing?
     suppressed = _is_nothing_to_record(reply)
-    log.info("Check-in reply in full:\n%s", reply)
+    log.info("Check-in reply: %d chars, %s, task ids %s", len(reply),
+             "nothing to record" if suppressed else "questions",
+             sorted(extract_task_ids(reply)) or "none")
 
     # Every run sends something (the heartbeat): the questions if there are
     # any, otherwise one line composed from the database with no model call.
