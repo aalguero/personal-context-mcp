@@ -259,6 +259,80 @@ check("the exception message is not in any record", EXC not in joined, joined[:3
 check("no record carries exc_info (no traceback)", cap.with_exc_info == 0)
 
 # ===========================================================================
+# 4. notify: the local file holds only what was not delivered, filtered
+# ===========================================================================
+notify = importlib.import_module(f"{PKG}.notify")
+MSG = "zqprobe-notify question about the biopsy results (4101)"
+FILTERED = "zqprobe-FILTERED line"
+
+
+class FakeBridge:
+    """Stands in for signal_bridge: configured or not, sending or raising."""
+    SignalAPIError = type("SignalAPIError", (Exception,), {})
+
+    def __init__(self, configured=True, fail=False):
+        self.configured, self.fail, self.sent = configured, fail, []
+
+    def is_configured(self):
+        return self.configured
+
+    def send(self, message, record=True):
+        if self.fail:
+            raise ConnectionError("container down")
+        self.sent.append(message)
+
+
+def run_notify(bridge, filt=lambda t: FILTERED, pre_mode=None) -> tuple[bool, str | None, int | None]:
+    """notify.send with a fake bridge and filter, LOG_PATH in the temp dir.
+    Returns (result, file text or None, file mode or None)."""
+    path = pathlib.Path(_tmp.name) / "pending_notifications.log"
+    if path.exists():
+        path.unlink()
+    if pre_mode is not None:
+        path.write_text("old\n")
+        path.chmod(pre_mode)
+    # getattr: a notify.py without the filter (the pre-11-12 one) must fail
+    # these checks on its behaviour, not crash the harness.
+    saved = (notify.LOG_PATH, notify.signal_bridge, getattr(notify, "filter_outbound", None), notify.RETRY_DELAYS)
+    notify.LOG_PATH, notify.signal_bridge, notify.filter_outbound, notify.RETRY_DELAYS = path, bridge, filt, (0, 0)
+    try:
+        with capturing():
+            ok = notify.send(MSG)
+    finally:
+        notify.LOG_PATH, notify.signal_bridge, notify.filter_outbound, notify.RETRY_DELAYS = saved
+    if not path.exists():
+        return ok, None, None
+    return ok, path.read_text(), path.stat().st_mode & 0o777
+
+
+section("4. notify: a delivered message leaves no local copy")
+b = FakeBridge()
+ok, text, mode = run_notify(b)
+check("send returns True and Signal got the message", ok is True and b.sent == [MSG])
+check("no file was written", text is None, repr(text)[:120])
+
+section("4. notify: an undelivered message is kept, filtered, mode 600")
+for label, bridge in (("Signal unconfigured", FakeBridge(configured=False)),
+                      ("send failed after retries", FakeBridge(fail=True))):
+    ok, text, mode = run_notify(bridge)
+    check(f"{label}: send returns False", ok is False)
+    check(f"{label}: the file holds the filtered text", text is not None and FILTERED in text, repr(text)[:120])
+    check(f"{label}: the raw message is not in it", text is not None and "zqprobe-notify" not in text)
+    check(f"{label}: written exactly once", text is not None and text.count("--- ") == 1, repr(text)[:160])
+    check(f"{label}: mode 600", mode == 0o600, oct(mode or 0))
+
+section("4. notify: a failing filter withholds, never writes raw")
+ok, text, mode = run_notify(FakeBridge(configured=False), filt=lambda t: (_ for _ in ()).throw(RuntimeError("db down")))
+check("the raw message is not in the file", text is not None and "zqprobe-notify" not in text, repr(text)[:120])
+check("the file says it was withheld, by class name",
+      text is not None and "withheld" in text and "RuntimeError" in text and "db down" not in text, repr(text)[:160])
+
+section("4. notify: a pre-existing 664 file is tightened on the next write")
+ok, text, mode = run_notify(FakeBridge(configured=False), pre_mode=0o664)
+check("the file is now mode 600", mode == 0o600, oct(mode or 0))
+check("and its earlier content is kept (append, not truncate)", text is not None and text.startswith("old\n"))
+
+# ===========================================================================
 section("Positive controls: the capture would see each kind of leak")
 lg = logging.getLogger("futile-assistant.test")
 with capturing() as cap:
