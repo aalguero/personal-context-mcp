@@ -161,11 +161,35 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
      so the live-config briefs never ran ahead of the code.
    - `main.py`'s CLI `ask` path also calls `quickask.ask`, so it gets the shop tools too.
      That is intended: it's on-demand, like Signal.
-   - **Still pending: Andre's live Signal test** (brief §6.3, add, read and remove
-     `zqprobe beans`). The registries are proven. The model choosing `pa_shop_add` over
-     `pa_task_add` is not. Production has no lists, so "grocery" must land as a
-     *category*. If the model passes it as a list name, `shop_add` creates a list
-     called "grocery". Check `pa.shopping_list` as well.
+   - **Live Signal test passed, 2026-11-12 17:17–17:18** (Andre). `zqprobe beans`
+     landed as shopping_item 1, category `grocery`. No list was created
+     (`pa.shopping_list` 0 rows), so the model read "grocery" as a category. The
+     item was removed with reason "it was a test", `bought_at` null. `pa.task` stayed
+     at 233 with no probe-titled task. His next real adds also landed as items. Read back
+     via `pa_sql`. **Task 217's failure mode is closed in practice.**
+8. **Log hygiene, hard rule 8** (`33cadcd` + `acc5019`, `log-hygiene-report.md`, agent
+   restarted 17:34, 524017 → 549266, MCP untouched). The agent's journal no longer
+   holds content:
+   - `agent_loop` logs the length of the model's side text, not the text.
+   - `checkin` logs `Check-in reply: N chars, <outcome>, task ids [..]` instead of the
+     whole reply, which went out **before** `filter_outbound`, four times a day.
+   - `main`/`watchdog` log class names only, where they had used `log.exception`.
+   - `tests/test_log_hygiene.py` passed 27/0 on the server. Each old version restored
+     on shadow failed it.
+   - **Baseline left in the journal** (counted, never printed): 6 side-text lines,
+     46 full replies (10-28 → 11-12 15:49), 17 tracebacks (14 from `Check-in run
+     failed`, 3 unattributed, all 11-04 → 11-09).
+   - The journal is persistent, has **no retention configured** and uses 642.6M, so
+     these lines stay until the size cap rotates them. Purging is Andre's decision.
+   - **Still pending:** the 19:48 fire's `Check-in reply: N chars` line, the live proof.
+   - **Found, not fixed:** `notify.send()` appends **every** outbound message,
+     unfiltered, to `futile-pa/assistant/pending_notifications.log`, before it checks
+     whether Signal is configured. The file is mode 664 in a 775 directory, 28 entries
+     since 10-28, gitignored. That is the same content, in a file every local user
+     can read. A leftover from before Signal worked, when the file was the only output.
+   - Also found: `main()` calls `run_scheduler()` with no handler, so an exception that
+     escapes the loop prints a full traceback via systemd's stderr capture. It handles
+     no task content today, inferred.
 
 ## What changed in the week of 2026-11-06
 

@@ -14,7 +14,8 @@ later session needs in order not to relitigate it.
 **Phase 1 shipped 2026-11-10** (commit `80abf0b`, migration `004_shopping.sql`): the
 tables, five `pa_shop_*` tools, and the Claude surface. **Phase 2 deployed 2026-11-12
 17:14** (`0facde4`, Signal, see below, `shop-phase2-report.md`). It needs no migration.
-Andre's live Signal test is still pending. Phases 3 and 4 are open.
+Andre's live Signal test passed the same day, adding and removing a probe item with no
+task created. Phases 3 and 4 are open.
 
 ---
 
@@ -211,7 +212,7 @@ The payoff is not the list; it is not having to remember to open it.
 | Phase | What | Why this order | State |
 |---|---|---|---|
 | 1 | Migration, MCP tools, the Claude surface | Testable end to end with no Signal risk | **done, `80abf0b`** |
-| 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **deployed 2026-11-12**, live test pending |
+| 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **done 2026-11-12**, `0facde4`, live-tested over Signal |
 | 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | open |
 | 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | open |
 
