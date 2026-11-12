@@ -284,6 +284,11 @@ one real date. Used for the seven cords of firewood and the garlic.
   second of history and are not a recovery path.
 - **A journal read without permission returns an empty result, not a refusal.** An
   empty result that reads like evidence is the worst failure a diagnostic can have.
+- **`grep` inside a Claude Code session on the server is not GNU grep.** It is a shell
+  function wrapping ugrep with `--ignore-files`, which honours `.gitignore`, so it
+  silently skips gitignored files, which here means every `.env` copy. On 2026-11-11 it
+  returned zero hits for a secret sitting in a file it was pointed at. **Any search
+  whose result is an absence uses `/usr/bin/grep`**, and has a positive control.
 
 ## 10. The backlog, 2026-11-11
 

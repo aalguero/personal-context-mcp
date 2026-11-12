@@ -232,6 +232,16 @@ first thirteen are below; 14–17 arrived in November and are the sharpest yet.
     `last_spawned_for` and anchors `after_completion` differently from `run()`. A brief
     prescribed it as the verification; it is a *verification that measures something
     other than what it claims* (task 222).
+18. **`grep` in a Claude Code session on the server is ugrep with `--ignore-files`.**
+    It honours `.gitignore`, so a sweep for the compromised password (task 196,
+    2026-11-11) returned no hits at all, not even the file it had to find. The brief's
+    positive control caught it; `/usr/bin/grep` found the file. Without the control the
+    result would have read as "no copies anywhere".
+19. **The same brief said `.gitignore` did not cover `.env.bak-*`.** It does, on line 14.
+    The claim came from reading the file with `head`, which showed ten of thirty lines,
+    so a conclusion was drawn from a truncated listing. Same shape as correction 13 and
+    the 11-04 `grep -oE '^[A-Z_]+='` miss: *a listing that silently stops short is not
+    evidence of absence.*
 
 ### Correction 8 in full, because the shape of it matters
 
