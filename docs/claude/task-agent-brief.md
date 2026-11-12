@@ -193,6 +193,11 @@ truth about its own priority.
 - Change importance on its own judgement. His word, or leave it.
 - Restructure projects, areas or goals.
 - Touch `/home/dremon/.personal-context/context.json` other than through `set_context`.
+- **Create a task for a shopping item.** Groceries, hardware and the like live on
+  shopping lists, not in `pa.task`. This run has no shopping tools, deliberately. If a
+  check-in reply mentions something to buy, say he can text it to the bot ("add
+  coffee to the grocery list"), and write nothing. A shopping need with a real deadline
+  ("pick up the turkey on the 25th") is still a task. Since 2026-11-12 (task 217).
 
 **When unsure, capture rather than act.** A task written for later costs nothing. A
 wrong write costs the trust that makes the whole thing work.

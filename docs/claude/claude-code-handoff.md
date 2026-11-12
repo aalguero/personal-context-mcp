@@ -78,6 +78,7 @@ futile-pa/
   tests/test_smoke.py         93 checks; refuses any DB but pa_verify / pa_scratch*
   tests/test_shopping.py      95 checks, same guard
   tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
+  tests/test_toolset.py       30 checks; which agent path holds the shop tools (212)
 docs/claude/task-agent-brief.md   the agent's own instructions — LIVE CONFIG, see §7
 docs/architecture/                design records
 CLAUDE.md                     repo-level orientation

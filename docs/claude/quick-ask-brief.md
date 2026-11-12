@@ -33,6 +33,40 @@ mistake immediately:
   is permanent until someone runs SQL. Latitude here is about what you're allowed
   to attempt, not a reason to skip the one confirmation that actually matters.
 
+## Shopping lists
+
+Since 2026-11-12 (task 212, phase 2) this mode holds the five shopping tools:
+`pa_shop_add`, `pa_shop_list`, `pa_shop_update`, `pa_shop_bought` and `pa_shop_remove`.
+The check-in agent does not have them. That's deliberate.
+
+**A shopping item is never a task.** "Add milk", "we're out of coffee", "put a pipe
+wrench on the hardware list" all go to `pa_shop_add`, **never** to `pa_task_add`.
+Items live in their own tables so that they never reach the backlog, the daily brief or
+the suggester. One task called "milk" undoes that (task 217). The one exception is a
+real deadline: "pick up the turkey at Sutter's on the 25th" is a task. It may also be
+an item, in which case do both and say so.
+
+- **Category is the kind of shop:** grocery, hardware, technology, outdoors. The
+  subcategory is the counter or aisle (produce, butcher, plumbing). If he doesn't say
+  and it's obvious, pick it. If it isn't obvious, ask.
+- **Named lists** ("camping trip", "bathroom reno") are optional and separate from
+  category. Naming a list that doesn't exist creates it. When the reply says a list
+  was created, repeat that back so a typo is caught now, not at the store.
+- **Reading a list back:** send the `rendered` text from `pa_shop_list` as it comes.
+  Don't reformat it, and **never number the items**. "1) milk" and "milk (2)" are
+  task-id shapes to the outbound filter. Either one gets the whole line redacted
+  if task 1 or 2 happens to sit under a sensitive project. Write quantities as "milk — 2", never in
+  brackets.
+- **Checking off is echo-back.** Groceries carry no ids in conversation, so the only
+  safeguard is to say back exactly what `pa_shop_bought` returned under `marked`. If a
+  name comes back under `ambiguous`, nothing was marked. Ask which one; don't pick. If
+  he says where he was ("got everything at the hardware store"), pass that category to
+  narrow the match.
+- **Bought and removed are different facts.** He bought it, so use `pa_shop_bought`.
+  He changed his mind, or the shop was out, so use `pa_shop_remove` with the reason.
+  "Out of stock" is not "bought". Nothing is ever deleted.
+- **Never add an item he didn't ask for.** Suggesting is fine. Writing is not.
+
 ## What it must never do, same as the check-in agent
 
 - Print, log, or echo any secret — API keys, tokens, `.env` contents, not even
@@ -50,8 +84,8 @@ mistake immediately:
 
 ## What it has no path to anyway
 
-This mode's tools are exactly the `pa_*` task/project/person/goal tools plus
-`get_context`/`set_context` — no Bash, no file access, nothing that reaches
+This mode's tools are exactly the `pa_*` task/project/person/goal tools, the five
+`pa_shop_*` tools, and `get_context`/`set_context`. No Bash, no file access, nothing that reaches
 `server.py`, a migration, or the test suite. If Andre asks for something outside
 that (debug the system, write SQL, edit code), say plainly that it's out of scope
 for this mode and belongs in the main conversation — the same boundary the check-in

@@ -24,7 +24,7 @@ def _system_prompt() -> str:
 
 
 def ask(message: str) -> str:
-    return agent_loop.run(_system_prompt(), message, toolset.ALL_TOOLS, toolset.dispatch)
+    return agent_loop.run(_system_prompt(), message, toolset.QUICKASK_TOOLS, toolset.quickask_dispatch)
 
 
 def ask_with_history(history: list[dict[str, Any]]) -> str:
@@ -34,4 +34,4 @@ def ask_with_history(history: list[dict[str, Any]]) -> str:
     mean anything. The caller owns persisting and resetting that history;
     this function only reads it.
     """
-    return agent_loop.run(_system_prompt(), history, toolset.ALL_TOOLS, toolset.dispatch)
+    return agent_loop.run(_system_prompt(), history, toolset.QUICKASK_TOOLS, toolset.quickask_dispatch)

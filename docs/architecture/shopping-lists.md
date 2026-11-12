@@ -12,7 +12,9 @@ each one below records the choice **and the reasoning**, because the reasoning i
 later session needs in order not to relitigate it.
 
 **Phase 1 shipped 2026-11-10** (commit `80abf0b`, migration `004_shopping.sql`): the
-tables, five `pa_shop_*` tools, and the Claude surface. Phases 2–4 are open.
+tables, five `pa_shop_*` tools, and the Claude surface. **Phase 2 built 2026-11-12**
+(Signal, see below). It needs no migration and is not deployed until the server brief
+`SHOP_PHASE2_BRIEF.md` reports. Phases 3 and 4 are open.
 
 ---
 
@@ -209,7 +211,7 @@ The payoff is not the list; it is not having to remember to open it.
 | Phase | What | Why this order | State |
 |---|---|---|---|
 | 1 | Migration, MCP tools, the Claude surface | Testable end to end with no Signal risk | **done, `80abf0b`** |
-| 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | open |
+| 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **built 2026-11-12**, deploy pending |
 | 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | open |
 | 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | open |
 
@@ -219,7 +221,34 @@ switched off on 11-08, its backup leg failed the same night, and it was off agai
 the 11-10 power cut. It should not be in the critical path of a feature Andre is trying to
 come to rely on.
 
-## The live gap until phase 2 — task 217
+## Phase 2 — Signal, settled with Andre 2026-11-12
+
+**Signal replies are not the check-in.** An inbound message goes
+`signal_bridge._handle_incoming` → `quickask.ask_with_history`, which reads
+`docs/claude/quick-ask-brief.md`. The four-a-day check-in reads `task-agent-brief.md`.
+Before phase 2 both used one registry, `toolset.ALL_TOOLS`. Task 217's proposed fix (a
+line in `task-agent-brief.md`) would have gone into the brief that never sees "add milk".
+
+Three decisions:
+
+1. **Only the Signal path gets the tools.** `toolset.QUICKASK_TOOLS` is `ALL_TOOLS`
+   plus the five, and `quickask_dispatch` routes them to `pa.shop.dispatch`. The
+   check-in keeps `ALL_TOOLS` and a `dispatch()` that does not route shop names, so
+   even a hallucinated `pa_shop_add` there is an unknown tool, not a write. Phase 3's
+   staple prompting is when the check-in gets read access, deliberately, again.
+2. **All five tools**, matching the original ask to add, update and delete from any
+   surface.
+3. **The 217 rule stays as a backstop.** Both briefs say a shopping item is never a
+   task. The check-in's says it has no shop tools and should point him at the bot.
+
+The read-back rule moved into the brief because the model, not the renderer, now
+writes the Signal reply: send `rendered` as it comes, never number items.
+`tests/test_toolset.py` (30 checks) proves the wiring, with a positive control for each
+property. Three code-level breaks were each confirmed to turn it red: quickask back on
+`ALL_TOOLS`, shop tools leaked into `ALL_TOOLS`, and the check-in `dispatch()` routing
+shop names.
+
+## The live gap until phase 2 — task 217 (closed by phase 2 once deployed)
 
 **The agent has no shop tools.** That isolation is what made phase 1 safe:
 `assistant/toolset.py` does `from pa.tools import TOOLS` wholesale, so registering the

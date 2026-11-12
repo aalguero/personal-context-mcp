@@ -6,9 +6,10 @@ the daily brief or the suggester.
 
 Why this is its own module rather than more entries in tools.py: the agent
 (`assistant/toolset.py`) imports `pa.tools.TOOLS` wholesale, so anything added
-there joins the agent's tool surface on its next restart. Phase 1 must not
-change the agent, so these tools are registered by server.py alone. Phase 2
-gives the agent its shopping tools deliberately, by importing SHOP_TOOLS.
+there joins the agent's tool surface on its next restart. Phase 1 registered
+these in server.py alone. Phase 2 (2026-11-12) gives them to the on-demand
+Signal path only, by name, in assistant/toolset.py (QUICKASK_TOOLS). The
+unattended check-in still has none.
 
 Two decisions run through it:
 
