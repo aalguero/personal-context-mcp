@@ -73,6 +73,11 @@ ever talk to itself.
 3. **Reconcile, read-only.** `pa_activity` for what has changed since the last run,
    plus `pa_sql` for the current picture: overdue, due today, `in_progress`, pace lines
    that have passed, and `waiting` tasks untouched for more than fourteen days.
+   **Overdue means `select … from pa.v_overdue`, never your own `due_on < current_date`.**
+   That view is the one definition (migration 005, 2026-11-11): open, past due, not
+   `someday`, and not deferred into the future unless it has a hard deadline. The daily
+   brief and the heartbeat count from it too, so a hand-written predicate is how you
+   end up disagreeing with them. The `someday` rule in §4 still stands regardless.
 4. **Decide whether to speak at all.** If nothing is stale and nothing has changed,
    record the run and say nothing. **Silence is a valid and good outcome.**
 5. **Ask**, if there is anything worth asking — rules in §4.
