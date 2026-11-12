@@ -15,11 +15,24 @@ means running it five times a day, or twice concurrently, creates one task per
 occurrence. That matters because it will be called both from a cron job and
 opportunistically whenever a daily brief is generated.
 
-The backfill guard is the other thing worth knowing about. A series with
-dtstart in 2020 and no materialised occurrences would otherwise generate six
-years of overdue trash on its first run. So a first run only looks back
-`max_backfill_days` (default 30); older occurrences are treated as water under
-the bridge.
+The backfill bound is the other thing worth knowing about. No fixed series
+ever reaches back more than `max_backfill_days` (default 1): an occurrence
+older than that which was never created is DISCARDED, not created late as an
+overdue task. That holds whether the series has never spawned (a dtstart in
+2020 would otherwise generate six years of overdue trash) or has spawned and
+then missed occurrences because the runner was down.
+
+Until task 221 the bound applied only to a series with no last_spawned_for. A
+stamped series resumed from its stamp however long the gap, so a two-week
+runner outage would have produced every missed occurrence as an overdue row.
+Andre, 2026-11-11, on eleven such occurrences: discard them. The work is not
+recoverable, only the rhythm is. That is now the general rule.
+
+A discard is a decision, so it is recorded rather than silent. run() returns
+the discarded dates per series, and last_spawned_for moves past them. The
+runner's self-check (recurrence_runner.unspawned) treats last_spawned_for as
+the boundary of what was decided, so a discard does not leave a
+recurrence_behind warning that nothing could clear.
 """
 
 from __future__ import annotations
@@ -56,7 +69,7 @@ def _occurrences(rule_text: str, dtstart: _dt.date, window_start: _dt.date,
     return out
 
 
-def run(as_of: str | _dt.date | None = None, max_backfill_days: int = 30,
+def run(as_of: str | _dt.date | None = None, max_backfill_days: int = 1,
         db: Db | None = None) -> dict[str, Any]:
     """Create task rows for every occurrence now due to exist.
 
@@ -64,12 +77,19 @@ def run(as_of: str | _dt.date | None = None, max_backfill_days: int = 30,
     how far ahead something should appear so it can be planned rather than
     discovered — a nursery pickup wants three weeks' notice; putting the bins out
     wants none.
+
+    A fixed series is expanded from max(the day after last_spawned_for,
+    as_of - max_backfill_days). Occurrences before that bound which were never
+    created are returned in `discarded` and not created (see the module
+    docstring).
     """
     db = db or get_db()
     today = _dt.date.fromisoformat(as_of) if isinstance(as_of, str) else (as_of or _dt.date.today())
+    floor = today - _dt.timedelta(days=max_backfill_days)
 
     created: list[dict] = []
     skipped: list[dict] = []
+    discarded: list[dict] = []
 
     for r in db.rows("select * from pa.recurrence where active order by id"):
         dtstart = _dt.date.fromisoformat(r["dtstart"])
@@ -79,17 +99,31 @@ def run(as_of: str | _dt.date | None = None, max_backfill_days: int = 30,
 
         if r["mode"] == "fixed":
             last = _dt.date.fromisoformat(r["last_spawned_for"]) if r.get("last_spawned_for") else None
-            window_start = (last + _dt.timedelta(days=1)) if last else max(
-                dtstart, today - _dt.timedelta(days=max_backfill_days)
-            )
-            if window_start > horizon:
-                continue
+            resume = (last + _dt.timedelta(days=1)) if last else dtstart
+            window_start = max(resume, dtstart, floor)
             try:
-                dates = _occurrences(r["rrule"], dtstart, window_start, horizon)
+                # What lies between where the series would resume and the
+                # floor was missed and is being given up. Only a stamped
+                # series reports it. A never-spawned series' history before
+                # the floor was never owed (the old first-run rule, unchanged).
+                missed = (_occurrences(r["rrule"], dtstart, resume, window_start - _dt.timedelta(days=1))
+                          if last and resume < window_start else [])
+                if until:
+                    missed = [d for d in missed if d <= until]
+                dates = (_occurrences(r["rrule"], dtstart, window_start, horizon)
+                         if window_start <= horizon else [])
             except Exception as exc:  # a bad rule should not stop the others
                 skipped.append({"recurrence_id": r["id"], "title": r["title"],
                                 "error": f"bad rrule: {exc}"})
                 continue
+            if missed:
+                discarded.append({"recurrence_id": r["id"], "title": r["title"],
+                                  "dates": [d.isoformat() for d in missed]})
+                # Record the decision: the series now resumes after them.
+                db.execute(
+                    "update pa.recurrence set last_spawned_for = greatest(coalesce(last_spawned_for, %s), %s) where id = %s",
+                    (max(missed), max(missed), r["id"]),
+                )
         else:
             # after_completion: normally rolled forward on completion. The only
             # case needing attention here is a series with no live instance at
@@ -140,7 +174,9 @@ def run(as_of: str | _dt.date | None = None, max_backfill_days: int = 30,
             )
 
     return {"as_of": today.isoformat(), "created": created,
-            "created_count": len(created), "skipped": skipped}
+            "created_count": len(created), "skipped": skipped,
+            "discarded": discarded,
+            "discarded_count": sum(len(d["dates"]) for d in discarded)}
 
 
 def preview(recurrence_id: int, count: int = 6, db: Db | None = None) -> list[str]:

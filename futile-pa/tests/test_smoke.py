@@ -260,6 +260,112 @@ check("a defer that moves due_on is not also logged as an edit",
       not any(e["action"] == "edited" for e in hist), str([e["action"] for e in hist]))
 check("reason captured", any("ADV Part 2" in (e.get("note") or "") for e in hist))
 
+section("A hard deadline cannot be hidden (task 227, migration 007)")
+# Each refusal is paired with the nearest legitimate write, so a guard that
+# refused everything would fail here too, not only a guard that refused nothing.
+def _err(res) -> str:
+    return str(res.get("error", "")) if isinstance(res, dict) else ""
+
+n_before = db.value("select count(*) from pa.task where title = 'HD someday fixture'")
+r = dispatch("pa_task_add", {"title": "HD someday fixture", "status": "someday",
+                             "hard_deadline": True, "due_on": D(10)})
+check("add: someday + hard deadline refused", "someday" in _err(r), str(r)[:120])
+check("add: refused someday created nothing",
+      db.value("select count(*) from pa.task where title = 'HD someday fixture'") == n_before)
+ok_someday = dispatch("pa_task_add", {"title": "Soft someday fixture", "status": "someday", "due_on": D(10)})
+check("add: someday on a soft date still allowed", "id" in ok_someday, str(ok_someday)[:120])
+
+r = dispatch("pa_task_add", {"title": "HD hidden past deadline", "hard_deadline": True,
+                             "due_on": D(5), "defer_until": D(5)})
+check("add: hard deadline hidden until its own date refused", "hidden until" in _err(r), str(r)[:120])
+lead = dispatch("pa_task_add", {"title": "HD lead-time fixture", "hard_deadline": True,
+                                "due_on": D(5), "defer_until": D(2)})
+check("add: hard deadline hidden until before its date allowed (lead time)",
+      lead.get("defer_until") == D(2), str(lead)[:120])
+
+before_m = repo.task_get(mercer["id"])
+r = dispatch("pa_task_update", {"task_id": mercer["id"], "status": "someday"})
+check("update: hard deadline to someday refused", "someday" in _err(r), str(r)[:120])
+check("update: refused someday changed nothing", repo.task_get(mercer["id"]) == before_m)
+
+r = dispatch("pa_task_update", {"task_id": lead["id"], "due_on": D(1)})
+check("update: moving a hard deadline before its defer_until refused", "hidden until" in _err(r), str(r)[:120])
+
+try:
+    db.execute("update pa.task set defer_until = due_on + 1 where id = %s", (mercer["id"],))
+    check("direct SQL: hiding a hard deadline past its date refused", False, "update succeeded")
+except Exception as exc:
+    check("direct SQL: hiding a hard deadline past its date refused", "hard deadline" in str(exc), str(exc)[:80])
+check("direct SQL: refused update changed nothing", repo.task_get(mercer["id"]) == before_m)
+
+soft_hidden = repo.task_add("Soft defer-clear fixture", due_on=D(20), defer_until=D(10))
+r = dispatch("pa_task_update", {"task_id": soft_hidden["id"], "defer_until": D(15)})
+check("update: setting defer_until refused (use pa_task_defer)", "pa_task_defer" in _err(r), str(r)[:120])
+check("update: refused defer_until changed nothing",
+      repo.task_get(soft_hidden["id"])["defer_until"] == D(10))
+r = dispatch("pa_task_update", {"task_id": soft_hidden["id"], "defer_until": None})
+check("update: clearing defer_until allowed", r.get("defer_until") is None and r.get("is_deferred") is False,
+      str(r)[:120])
+
+done_hd = repo.task_complete(lead["id"])
+check("a hard-deadline task can still be completed", done_hd["completed"]["status"] == "done")
+dropped = dispatch("pa_task_drop", {"task_id": ok_someday["id"], "reason": "fixture"})
+check("dropping still works", dropped.get("status") == "dropped", str(dropped)[:120])
+
+section("Recurrence — the backfill bound applies to every series (task 221)")
+# A weekly series with occurrences on TODAY-63+7k, so TODAY is an occurrence,
+# and a stamp at TODAY-22 as if it last spawned three weeks ago and the
+# runner then stopped. Missed: TODAY-21, -14, -7. Due today: TODAY.
+import importlib.util as _ilu                                    # noqa: E402
+_spec = _ilu.spec_from_file_location(
+    "recurrence_runner", pathlib.Path(__file__).resolve().parent.parent / "scripts" / "recurrence_runner.py")
+runner = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(runner)
+
+
+def _stalled_series(title: str) -> dict:
+    s = repo.recurrence_add(title, mode="fixed", rrule="FREQ=WEEKLY", importance=1,
+                            dtstart=(TODAY - _dt.timedelta(days=63)).isoformat())
+    db.execute("update pa.recurrence set last_spawned_for = %s where id = %s", (D(-22), s["id"]))
+    return s
+
+
+def _occ_dates(rid: int) -> list[str]:
+    return [r["occurrence_date"] for r in db.rows(
+        "select occurrence_date from pa.task where recurrence_id = %s order by occurrence_date", (rid,))]
+
+
+missed = [D(-21), D(-14), D(-7)]
+a = _stalled_series("Backfill fixture A")
+behind_before, _ = runner.unspawned(db, TODAY)
+check("self-check sees a stalled series before the run (control)", a["id"] in behind_before, str(behind_before))
+
+out = recurrence.run()  # the default bound
+check("stalled series: only today's occurrence created", _occ_dates(a["id"]) == [D(0)], str(_occ_dates(a["id"])))
+mine = [d for d in out["discarded"] if d["recurrence_id"] == a["id"]]
+check("stalled series: the missed occurrences are reported as discarded",
+      bool(mine) and mine[0]["dates"] == missed, str(mine))
+check("stalled series: the stamp moved past the discards",
+      db.value("select last_spawned_for from pa.recurrence where id = %s", (a["id"],)) >= D(0))
+behind_after, _ = runner.unspawned(db, TODAY)
+check("self-check is clean after a discard (no warning it cannot clear)",
+      a["id"] not in behind_after, str(behind_after))
+check("a second run discards nothing more",
+      not any(d["recurrence_id"] == a["id"] for d in recurrence.run()["discarded"]))
+
+# Positive control: the same shape with a 30-day bound DOES create the missed
+# rows late. So the bound is what kept them out above, not the fixture.
+b = _stalled_series("Backfill fixture B")
+recurrence.run(max_backfill_days=30)
+check("control: a 30-day bound creates the missed occurrences late",
+      _occ_dates(b["id"]) == missed + [D(0)], str(_occ_dates(b["id"])))
+
+# The MCP tool's default, which used to be 30.
+c = _stalled_series("Backfill fixture C")
+res = dispatch("pa_recurrence_run", {})
+check("pa_recurrence_run with no bound discards rather than floods",
+      _occ_dates(c["id"]) == [D(0)] and res["discarded_count"] >= 3, str(_occ_dates(c["id"])))
+
 section("Recurrence — fixed vs after completion")
 bills = repo.recurrence_add("Pay the mortgage", mode="fixed",
                             rrule="FREQ=MONTHLY;BYMONTHDAY=1", project="admin-2026",

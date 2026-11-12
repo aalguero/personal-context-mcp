@@ -43,13 +43,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 CATEGORY = "recurrence_runner"
-# Never the engine's default of 30. max_backfill_days bounds how far back a
-# series with no last_spawned_for reaches on its first run; a wider bound
-# resurrects dead occurrences -- on 11-11 the default would have created twelve
-# overdue Job Search rows, five at importance 5 (task 188). One day is enough
-# for a nightly runner: it covers a series created yesterday. NOTE it does not
-# bound a series that already has a last_spawned_for -- that one resumes from
-# its stamp however long the runner was down.
+# max_backfill_days bounds how far back ANY fixed series reaches (task 221; it
+# used to bound only a series that had never spawned). An occurrence older
+# than this that was never created is discarded, not created late as an
+# overdue row. On 11-11 a 30-day bound would have created twelve overdue Job
+# Search rows, five at importance 5 (task 188). One day is enough for a
+# nightly runner: it covers a series created yesterday and a run that straddles
+# midnight. Stated here as well as being the engine's default, so a change to
+# that default cannot silently change the runner.
 MAX_BACKFILL_DAYS = 1
 # A due-to-exist occurrence this many days old with no row is a fault. run()
 # has just created everything due through today, so one day is only slack for
@@ -127,6 +128,13 @@ def main() -> int:
         log(f"created {out['created_count']} task(s)" + (f": {made}" if made else ""))
         if out["skipped"]:
             log("skipped series with a bad rule: " + ", ".join(str(s["recurrence_id"]) for s in out["skipped"]))
+        # Missed occurrences given up rather than created late (task 221).
+        # Normally empty. Non-empty means the runner was not running, which
+        # recurrence_stale will already have alerted on. Ids and counts only.
+        discarded = {str(d["recurrence_id"]): len(d["dates"]) for d in out["discarded"]}
+        if discarded:
+            log("discarded missed occurrence(s), not created late: "
+                + ", ".join(f"series {k} x{v}" for k, v in discarded.items()))
 
         behind, bad = unspawned(db, today)
         if behind or bad:
@@ -139,7 +147,7 @@ def main() -> int:
         # last_check first, so a fresh last_run_at never sits beside a stale check.
         context_store.set(CATEGORY, "last_check", {
             "at": now, "as_of": today.isoformat(), "created_count": out["created_count"],
-            "behind": behind, "bad_rule": bad})
+            "discarded": discarded, "behind": behind, "bad_rule": bad})
         context_store.set(CATEGORY, "last_run_at", now)
     except Exception as e:  # never a traceback: no locals, no DSN in the journal
         log(f"run failed ({type(e).__name__}) -- no stamp written")

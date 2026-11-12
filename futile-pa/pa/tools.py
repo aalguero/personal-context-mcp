@@ -169,6 +169,9 @@ TOOLS: list[dict] = [
         "due_at": {"type": "string"},
         "hard_deadline": {"type": "boolean"},
         "scheduled_for": _DATE,
+        "defer_until": {"type": "null",
+                        "description": "Only null is accepted: it clears a deferral, making the task "
+                                       "visible again. To defer, use pa_task_defer."},
         "project": _REF,
         "person": _REF,
         "waiting_on": _REF,
@@ -383,9 +386,12 @@ TOOLS: list[dict] = [
        cron; call it manually after adding a series to see its first instance.
        """, {
         "as_of": _DATE,
-        "max_backfill_days": {"type": "integer", "default": 30,
-                              "description": "On a series' first run, how far back to reach. "
-                                             "Stops an old dtstart generating years of overdue items."},
+        "max_backfill_days": {"type": "integer", "default": 1,
+                              "description": "How far back to reach, for every series. An occurrence "
+                                             "older than this that was never created is discarded, not "
+                                             "created late as an overdue task. Stops an old dtstart, or a "
+                                             "runner outage, generating a flood of overdue items. The "
+                                             "nightly runner uses 1; raise it only deliberately."},
     }),
 
     _t("recurrence_preview", """
@@ -471,6 +477,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "goal_add":           lambda a: repo.goal_add(**a),
     "recurrence_add":     lambda a: repo.recurrence_add(**a),
     "recurrence_list":    lambda a: {"recurrences": repo.recurrence_list(**a)},
+    # The schema's default above is documentation only. An omitted
+    # max_backfill_days takes run()'s own default, which is the one that acts.
     "recurrence_run":     lambda a: _rec.run(**a),
     "recurrence_preview": lambda a: {"next": _rec.preview(a["recurrence_id"], a.get("count", 6))},
     "vocabulary":         _vocabulary,

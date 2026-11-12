@@ -30,9 +30,15 @@ from .db import Db, get_db
 
 # Columns a caller may set on a task. Everything else — completed_at,
 # defer_count, timestamps — is maintained by the database.
+#
+# defer_until is deliberately absent (task 227). Pushing it forward is a
+# deferral, and a deferral goes through pa.defer_task, which moves a soft
+# due_on with it and refuses a hard deadline. Through update it was a side
+# door around both. task_update still accepts defer_until=None, because
+# clearing a deferral only makes a task more visible and needs no guard.
 TASK_WRITABLE = (
     "title", "notes", "status", "importance", "effort_minutes", "energy",
-    "due_on", "due_at", "hard_deadline", "defer_until", "scheduled_for",
+    "due_on", "due_at", "hard_deadline", "scheduled_for",
     "waiting_on_note", "project_id", "person_id", "waiting_on_person_id",
     "parent_task_id", "external_url",
 )
@@ -173,19 +179,23 @@ def task_add(
 
     # One transaction: a task and its tags either both land or neither does.
     with db.transaction():
-        row = db.row(
-            """
-            insert into pa.task
-              (title, notes, project_id, person_id, waiting_on_person_id, status,
-               importance, effort_minutes, energy, due_on, due_at, hard_deadline,
-               defer_until, scheduled_for, parent_task_id, source, source_id, external_url)
-            values (%s,%s,%s,%s,%s,%s,coalesce(%s,3),%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            returning id
-            """,
-            (title, notes, project_id, person_id, waiting_id, status, importance,
-             effort_minutes, energy, due_on, due_at, hard_deadline, defer_until,
-             scheduled_for, parent_task_id, source, source_id, external_url),
-        )
+        try:
+            row = db.row(
+                """
+                insert into pa.task
+                  (title, notes, project_id, person_id, waiting_on_person_id, status,
+                   importance, effort_minutes, energy, due_on, due_at, hard_deadline,
+                   defer_until, scheduled_for, parent_task_id, source, source_id, external_url)
+                values (%s,%s,%s,%s,%s,%s,coalesce(%s,3),%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                returning id
+                """,
+                (title, notes, project_id, person_id, waiting_id, status, importance,
+                 effort_minutes, energy, due_on, due_at, hard_deadline, defer_until,
+                 scheduled_for, parent_task_id, source, source_id, external_url),
+            )
+        except psycopg.errors.InvalidParameterValue as exc:
+            # The hard-deadline guard (migration 007): a refusal the caller can act on.
+            raise ValueError(exc.diag.message_primary or str(exc)) from None
         tid = row["id"]
 
         for cid in resolve_contexts(db, contexts):
@@ -231,6 +241,14 @@ def task_update(
         fields["waiting_on_person_id"] = resolve_person(db, waiting_on)
 
     for k, v in fields.items():
+        if k == "defer_until":
+            if v is not None:
+                raise ValueError(
+                    "defer_until cannot be set by an update. Use pa_task_defer, which records "
+                    "the deferral, moves a soft due date with it and refuses a hard deadline. "
+                    "Passing defer_until=null here clears a deferral.")
+            sets.append("defer_until = null")
+            continue
         if k not in TASK_WRITABLE:
             raise ValueError(f"Field '{k}' is not writable. Allowed: {', '.join(TASK_WRITABLE)}")
         sets.append(f"{k} = %s")
@@ -238,7 +256,11 @@ def task_update(
 
     if sets:
         params.append(task_id)
-        n = db.execute(f"update pa.task set {', '.join(sets)} where id = %s", params)
+        try:
+            n = db.execute(f"update pa.task set {', '.join(sets)} where id = %s", params)
+        except psycopg.errors.InvalidParameterValue as exc:
+            # The hard-deadline guard (migration 007): e.g. status=someday on a hard deadline.
+            raise ValueError(exc.diag.message_primary or str(exc)) from None
         if n == 0:
             raise NotFound(f"No task {task_id}")
 

@@ -164,6 +164,11 @@ truth about its own priority.
 **May:**
 - Complete a task — `pa_task_complete`, with a note saying what happened.
 - Change status — `next`, `in_progress`, `waiting`, `someday`.
+  **Except a task with a hard deadline: it cannot be moved to `someday` or deferred.**
+  The tool returns an error saying so and changes nothing. Don't retry, and don't
+  look for another way to hide it. Tell Andre the date is external, and ask
+  whether it still applies. If it doesn't, he can have it dropped or the flag
+  cleared. Since 2026-11-12 (task 227, migration 007).
 - Defer with a reason — `pa_task_defer`. Always a reason; that is the part worth
   having in six weeks.
 - Move a due date — `pa_task_update`.
