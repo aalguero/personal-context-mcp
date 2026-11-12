@@ -15,7 +15,8 @@ from zoneinfo import ZoneInfo
 
 from pa.db import get_db
 
-from . import agent_loop, notify, toolset
+from . import agent_loop, ledger, notify, toolset
+from .sensitivity_filter import filter_outbound
 
 BRIEF_PATH = Path(__file__).resolve().parents[2] / "docs" / "claude" / "task-agent-brief.md"
 
@@ -41,15 +42,14 @@ RUN_PROMPT = (
 )
 
 # Appended to RUN_PROMPT when the previous check-in's output never left the
-# machine. The model records asked_recently/open_questions during the run,
-# before the send, so without this a failed send would mark questions as
-# asked that Andre never saw, and the 24-hour rule would then suppress them.
+# machine. Since task 213 the ledger records asked questions only after a
+# successful send, so an undelivered run left no trace in asked_recently and
+# there is nothing to correct. The note is still worth sending: it tells the
+# model why questions it may "remember" from its log were never seen.
 UNDELIVERED_NOTE = (
     "\n\nIMPORTANT: the check-in output you produced at {since} was NOT "
-    "delivered to Andre (the Signal send failed). Any questions that run "
-    "recorded in task_agent.asked_recently or open_questions were never seen "
-    "by him. Treat them as not asked: correct those entries, and ask them "
-    "again in this run if they are still relevant."
+    "delivered to Andre (the Signal send failed). Nothing from that run was "
+    "recorded as asked. Ask again in this run if those questions are still relevant."
 )
 
 TZ = ZoneInfo("America/New_York")
@@ -79,6 +79,13 @@ def run_once() -> str:
     )
     undelivered = toolset.dispatch("get_context", {"category": WATCHDOG_CATEGORY}).get("undelivered_since")
     prompt = RUN_PROMPT + (UNDELIVERED_NOTE.format(since=undelivered) if undelivered else "")
+    # Before the model reads its state, so open_questions does not carry
+    # questions that have since been dealt with. Not fatal: a stale
+    # open_questions is the pre-213 condition, not a reason to skip a check-in.
+    try:
+        ledger.prune_open_questions(get_db())
+    except Exception as e:
+        log.error("Could not prune open questions (%s)", type(e).__name__)
     try:
         reply = agent_loop.run(system_prompt, prompt, toolset.ALL_TOOLS, toolset.dispatch)
     except Exception as e:
@@ -102,6 +109,16 @@ def run_once() -> str:
     if not suppressed:
         delivered = notify.send(reply)
         outcome = "questions sent" if delivered else "questions NOT delivered (Signal send failed)"
+        if delivered:
+            # Task 213: the moment the question became true is now, so this
+            # is where it is recorded, from the text Andre actually received.
+            # (filter_outbound is deterministic; signal_bridge.send applied
+            # the same call to the same reply.) A failure here is logged and
+            # the run still completes: the message did go out.
+            try:
+                ledger.record_questions(filter_outbound(reply), get_db())
+            except Exception as e:
+                log.error("Could not record asked questions (%s)", type(e).__name__)
     else:
         delivered = notify.send(heartbeat_line(), record=False)
         outcome = ("nothing to ask, heartbeat sent" if delivered

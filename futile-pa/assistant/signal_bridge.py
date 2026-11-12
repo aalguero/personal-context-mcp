@@ -31,7 +31,7 @@ from typing import Any
 
 import requests
 
-from . import context_store, quickask
+from . import context_store, ledger, quickask
 from .sensitivity_filter import filter_outbound
 
 log = logging.getLogger("futile-assistant.signal")
@@ -238,6 +238,14 @@ def _handle_incoming(envelope: dict[str, Any]) -> None:
     if source != ALLOWED_SENDER:
         log.warning("Ignored a message from a non-allowed sender")
         return
+
+    # Task 213: the reply path never recorded that Andre had replied, so the
+    # agent could count strikes while being answered. Stamped before the
+    # model call, because he has replied whether or not the reply then works.
+    try:
+        ledger.record_reply()
+    except Exception as e:
+        log.error("Could not record the reply time (%s)", type(e).__name__)
 
     snapshot = _append("user", text)
     try:

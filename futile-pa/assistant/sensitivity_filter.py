@@ -24,9 +24,10 @@ import re
 
 from pa.db import get_db
 
+from .task_ids import extract_task_ids
+
 SENSITIVE_PATH_KEYWORDS = ("health", "finances", "estate", "senior care", "medical")
 
-_TASK_ID_PATTERN = re.compile(r"\((\d+)\)|\btask\s+#?(\d+)\b", re.IGNORECASE)
 _LEADING_MARKER = re.compile(r"^(\s*(?:\d+\.|[-*])\s*)")
 
 
@@ -41,12 +42,7 @@ def filter_outbound(text: str) -> str:
 
 
 def _extract_task_ids(line: str) -> set[int]:
-    ids: set[int] = set()
-    for m in _TASK_ID_PATTERN.finditer(line):
-        for group in m.groups():
-            if group:
-                ids.add(int(group))
-    return ids
+    return extract_task_ids(line)
 
 
 def _is_sensitive(task_id: int, cache: dict[int, bool]) -> bool:

@@ -153,10 +153,11 @@ it returns success, retries 3 times at 5s and 20s (enough to ride out a containe
 restart), and does **not** retry a read timeout, because that is ambiguous and a
 duplicate question is worse than one recorded as undelivered.
 
-A failed send sets `undelivered_since`, and the next run's prompt is told to treat those
-questions as never asked — because the model records `asked_recently` *during* the run,
-before the send, so a failed send would otherwise mark questions as asked that Andre
-never saw.
+A failed send sets `undelivered_since`, and the next run's prompt is told that those
+questions were never seen. Since task 213 (2026-11-11) there is nothing to correct:
+`assistant/ledger.py` records `asked_recently` and `open_questions` only after a send
+succeeds, from the ids in the text as sent. Before that, the model was supposed to
+record them during the run, before the send. On 11-10 it didn't record them at all.
 
 ## The diagnostic table
 

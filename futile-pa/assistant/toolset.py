@@ -14,6 +14,7 @@ from pa.tools import TOOLS as _PA_TOOLS
 from pa.tools import dispatch as _pa_dispatch
 
 from . import context_store as _ctx
+from . import ledger as _ledger
 
 _CONTEXT_TOOLS: list[dict[str, Any]] = [
     {
@@ -59,6 +60,12 @@ def dispatch(name: str, args: dict[str, Any] | None = None) -> Any:
     if name == "get_context":
         return _ctx.get(args.get("category"))
     if name == "set_context":
+        # dispatch() is the model's route to the store. Code writes the
+        # ledger's keys through context_store directly, so this refusal
+        # applies only to the model (task 213).
+        refused = _ledger.refuse_model_write(args.get("category"), args.get("key"))
+        if refused:
+            return refused
         _ctx.set(args["category"], args["key"], args["value"])
         return {"ok": True}
     return _pa_dispatch(name, args)

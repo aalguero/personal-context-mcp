@@ -83,7 +83,9 @@ ever talk to itself.
 5. **Ask**, if there is anything worth asking — rules in §4.
 6. **Write back** whatever his reply establishes, within the limits in §5.
 7. **Report** what it changed, in the format in §6.
-8. **Save state** to the context store and finish.
+8. **Save state** to the context store and finish. That means `last_run_at` and, if
+   you have any, `notes`. **Not** what you asked or when he replied: code records those
+   (§7).
 
 ## 4. How it chooses what to ask
 
@@ -137,9 +139,10 @@ of those is safe. §6 already requires ids in the written report, for the stated
 that *ids are how anything gets corrected later*; the same argument applies to the
 question, and it was missed.
 
-The reason it matters here specifically: over Signal, outbound check-ins are **not**
-written into the bridge's conversation history (task 197), so the session handling the
-reply may have no record of what it asked. An id in the question survives that, and
+The reason it matters here specifically: since task 197 a delivered check-in does enter
+the bridge's conversation history, but that history lives in memory only. It resets
+after a day of silence and is lost on a restart, so the session handling the reply may
+still have no record of what it asked. An id in the question survives that, and
 survives a service restart, and survives an answer that arrives two days later. A bare
 ordinal does not — it gets mapped to whatever seems plausible, which is how wrong rows
 get written confidently.
@@ -217,13 +220,28 @@ was written, say *nothing to record* and stop.
 
 In the futileMCP context store, category **`task_agent`**:
 
-| Key | Why |
-|---|---|
-| `last_run_at` | so a stalled agent can be detected — see §8 |
-| `last_reply_at` | when Andre last actually answered |
-| `unanswered_runs` | consecutive runs with no reply |
-| `asked_recently` | task ids and when, to enforce the 24-hour rule |
-| `open_questions` | asked, not yet answered — carried to the next run |
+| Key | Written by | Why |
+|---|---|---|
+| `last_run_at` | you | so a stalled agent can be detected — see §8 |
+| `notes` | you | standing observations worth carrying between runs. Optional |
+| `last_reply_at` | **code** | when Andre last sent a message, as an ISO timestamp |
+| `unanswered_runs` | **code** | delivered question runs since his last message. Any message resets it to 0 |
+| `asked_recently` | **code** | `{task id: ISO time asked}`, kept for a week. Apply the 24-hour rule to it |
+| `open_questions` | **code** | `{task id: ISO time asked}`. Entries leave once the task has been touched since, closed, or a week has passed |
+
+**Since task 213 (2026-11-11), the four code keys are written by the assistant itself,
+and `set_context` refuses them if you try.** Before, you were trusted to record what you
+asked, and on 2026-11-10 a run asked about task 208 and recorded nothing. So the 24-hour
+rule and three strikes were both running on a record nothing was writing. Now a
+question is recorded when Signal accepts the message, taken from the task ids in the
+text that was sent. That is one more reason every question must carry its id: **a
+question without an id is not recorded, and so it can be repeated.** A reply is
+recorded when his message arrives.
+
+What the record cannot tell you is *which* question he answered. Use `pa_activity` and
+the tasks themselves for that, as before.
+
+Prose that earlier runs wrote into those keys was moved, not deleted, to `notes_pre_213`.
 
 Per-task history stays on the tasks themselves (`pa_task_history`, notes). Nothing
 accumulates in a document that would grow without bound.

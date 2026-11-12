@@ -207,15 +207,16 @@ check("no filter gives everything active", e["count"] == db.value(
     "select count(*) from pa.shopping_item where bought_at is null and removed_at is null"))
 
 section("Read-back: no task-id-shaped text")
-# The filter's real pattern, not a copy. Loaded by file path, because importing
-# the assistant package runs its __init__, which calls set_db() and would
-# silently swap this suite's database handle mid-run.
+# The filter's real pattern, not a copy: since task 213 it lives in
+# assistant/task_ids.py, shared by the filter and the check-in ledger. Loaded
+# by file path, because importing the assistant package runs its __init__,
+# which calls set_db() and would silently swap this suite's database handle mid-run.
 import importlib.util  # noqa: E402
 _spec = importlib.util.spec_from_file_location(
-    "_sensitivity_filter", pathlib.Path(__file__).resolve().parent.parent / "assistant" / "sensitivity_filter.py")
+    "_task_ids", pathlib.Path(__file__).resolve().parent.parent / "assistant" / "task_ids.py")
 _sf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_sf)
-_TASK_ID_PATTERN = _sf._TASK_ID_PATTERN
+_TASK_ID_PATTERN = _sf.TASK_ID_PATTERN
 check("loading the filter did not swap the database handle", __import__("pa.db").db.get_db() is db)
 call("pa_shop_add", {"name": "AA batteries (24)", "category": "technology", "notes": "see task 12"})
 call("pa_shop_add", {"name": "jar lids", "category": "hardware", "quantity": "(12)"})
