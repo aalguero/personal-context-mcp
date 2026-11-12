@@ -134,9 +134,11 @@ def heartbeat_line(now: datetime | None = None) -> str:
     now = now or datetime.now(timezone.utc)
     hhmm = now.astimezone(TZ).strftime("%H:%M")
     try:
+        # overdue from pa.v_overdue, the one definition (migration 005), so the
+        # heartbeat cannot disagree with the daily brief about what is late.
         r = get_db().row("""select count(*) as open,
                                    count(*) filter (where due_on = current_date) as due,
-                                   count(*) filter (where due_on < current_date) as overdue
+                                   (select count(*) from pa.v_overdue) as overdue
                               from pa.task where status not in ('done', 'dropped')""")
         counts = f"{r['open']} open, {r['due']} due today, {r['overdue']} overdue"
     except Exception as e:
