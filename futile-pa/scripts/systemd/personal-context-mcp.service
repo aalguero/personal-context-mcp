@@ -1,0 +1,12 @@
+[Unit]
+Description=Personal Context MCP Server SSE
+After=network.target
+
+[Service]
+ExecStart=/home/dremon/tools/personal-context-mcp/.venv-new/bin/python /home/dremon/tools/personal-context-mcp/server.py --sse --host 127.0.0.1 --port 8765
+WorkingDirectory=/home/dremon/tools/personal-context-mcp/
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
