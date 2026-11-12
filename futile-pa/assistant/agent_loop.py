@@ -82,10 +82,13 @@ def run(
         turn_text = "".join(b.text for b in response.content if b.type == "text")
         log.debug("turn %d: stop_reason=%s block_types=%s", turn, response.stop_reason, block_types)
         if turn_text and response.stop_reason == "tool_use":
-            # Text accompanying a tool call isn't the final answer, but it's
-            # real content a future reader might want — logged, not returned,
-            # so the function's contract (one final answer) doesn't change.
-            log.info("turn %d produced text alongside a tool call: %s", turn, turn_text)
+            # Text accompanying a tool call isn't the final answer. Its length
+            # is logged, never the text: it is the model talking about what it
+            # is doing ("adding beans to your grocery list"), so it carries
+            # task and item content, and the journal is not filtered the way
+            # outbound Signal is (hard rule 8; found by shop-phase2-report,
+            # 2026-11-12, after it had fired six times since 10-30).
+            log.info("turn %d produced %d chars of text alongside a tool call", turn, len(turn_text))
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason != "tool_use":
