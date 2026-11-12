@@ -60,7 +60,7 @@ is how a restore was independently verified.
 
 | | |
 |---|---|
-| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `891c57a`, deployed 2026-11-11 22:30) |
+| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `7177270`, deployed 2026-11-12 16:10) |
 | futile-pa | `/home/dremon/tools/personal-context-mcp/futile-pa` — inside the repo. Old tree at `/home/dremon/futile-pa.pre-git` |
 | Scripts | `futile-pa/scripts/` — `backup.sh`, `external_watchdog.py`, `recurrence_runner.py`, `deadman_ping.py`, `backup_alerts.py`, `prune_backups.py`, `migrate.py`. **Note the `futile-pa/` prefix** |
 | Interpreter | `/home/dremon/tools/personal-context-mcp/.venv-new/bin/python` — Python 3.13.5. **Not** `futile-pa/.venv-new` |
@@ -73,11 +73,11 @@ is how a restore was independently verified.
 | Auth | shared secret, ASGI middleware, all paths, **404 on failure**, fail-closed at startup |
 | Bind | **`127.0.0.1:8765` only**, since 2026-11-12 14:23 (task 219, Andre's decision). Every client goes through Funnel. Unit in git: `futile-pa/scripts/systemd/personal-context-mcp.service` (`785a99a`). Proved from shadow: tailnet and LAN direct went from 404 to connection refused; Funnel still answers. The Claude Code connector on shadow (`~/.claude.json`, `personal-context`) uses the Funnel URL; from shadow that hostname resolves to the tailnet address and reaches tailscaled on 443, which forwards to 127.0.0.1. **In the access log, port `0` means "arrived through tailscaled"** (`X-Forwarded-For` carries no port); a real port means a direct connection, which now can only be localhost |
 | Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed |
-| Migrations | **001–006 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004" is now **007** (task 218) |
+| Migrations | **001–007 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30), 007_hard_deadline_guard (2026-11-12 16:10). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004", then "007", must now be **008** (task 218), since 007 was taken by the next real migration |
 | Agent | fires 07:48 / 11:48 / 15:48 / 19:48 America/New_York. `main()` starts the Signal bridge as a daemon thread, then the scheduler |
 | Signal | `signal-cli-rest-api` in Docker, image pinned by digest, `MODE=normal`, `--log-driver none`, bound `127.0.0.1:8080`. **A separately registered account**, not a linked device. Discoverability off |
 | Monitoring | 5 external watchdog assertions + 2 dead-man checks + delivery receipts + a heartbeat on every fire. See `architecture/monitoring.md` |
-| Test suites | `test_smoke.py` **70** checks, `test_shopping.py` **95** (94 until 11-11; the 95th checks the backlog snapshot is deterministic). Both refuse any database but `pa_verify` / `pa_scratch*`. `test_ledger.py` **42**, no database, refuses to run unless the context store is redirected to a temp dir |
+| Test suites | `test_smoke.py` **93** checks (70 until 11-12; 23 added for tasks 221 and 227), `test_shopping.py` **95** (94 until 11-11; the 95th checks the backlog snapshot is deterministic). Both refuse any database but `pa_verify` / `pa_scratch*`. `test_ledger.py` **42**, no database, refuses to run unless the context store is redirected to a temp dir |
 | Agent's own record | `task_agent.asked_recently`, `open_questions`, `last_reply_at`, `unanswered_runs` are **written by code** (`assistant/ledger.py`, task 213). Model writes to them are refused by the agent's `toolset.dispatch` **and** by `server.py`'s `set_context` / `delete_context`. The list is in `assistant/agent_keys.py`; `server.py` loads it by file path and **exits at startup** if it cannot |
 | Disk encryption | **Server: NONE** (task 112). **shadow: YES** — and shadow holds the age private key, which is what makes the asymmetry hold. See `encryption-at-rest.md` |
 | Tailnet | futileassistant `100.108.86.16` / LAN `192.168.86.35`; shadow (DNS `darkslip`) `100.102.50.58` / `192.168.86.40`; vocalassistant `100.75.132.20` / `192.168.86.251`; homeassistant `100.96.213.73`; pixelatedandroid `100.122.109.81` |
@@ -125,6 +125,26 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
    (`assistant/task_ids.py`) now also matches the brief's id-numbered `171)` form.
    Before, such a line was invisible to the filter and a sensitive task numbered that
    way would have gone out unredacted.
+6. **Tasks 221 and 227: two protections now cover every path** (`7177270`, migration
+   007, `backfill-and-deadline-report.md`). Code written and proven on shadow against a
+   throwaway Postgres in the session scratchpad, deployed by brief.
+   - **221.** Every fixed series now looks back at most `max_backfill_days` (default 1;
+     `pa_recurrence_run` was 30). That includes a series with a stamp. Missed
+     occurrences are **discarded**, which makes Andre's 11-11 ruling the general rule.
+     They're logged as `series N xK`, recorded in `recurrence_runner.last_check.discarded`,
+     and `last_spawned_for` moves past them so `recurrence_behind` can't raise a warning
+     it can never clear. On a restore of production, a simulated 21-day outage of series 1
+     discarded five dates with 0 late rows; the old code created them.
+   - **227.** Trigger `task_hard_deadline_guard` refuses an open hard-deadline task that
+     is `someday`, or whose `defer_until` is on or after its `due_on`. Lead-time hiding
+     before the deadline stays legal (task 159). `defer_until` left `TASK_WRITABLE`, so
+     `pa_task_update` can only clear it. Refusals come back as `{"error": ...}`. On real
+     task 159 both hiding paths were refused, and both controls went through.
+   - Live tool schema proven from shadow 11-12 without a write: `pa_task_update` on a
+     non-existent task with `defer_until` set was rejected with `is not of type 'null'`.
+     That type exists only in 7177270.
+   - **Still pending:** the first live 03:00 runner on the new code. Expect `created 0`
+     and no `discarded` line on 11-13 (Friday; nothing is due).
 
 ## What changed in the week of 2026-11-06
 
@@ -261,7 +281,9 @@ first thirteen are below; 14–21 arrived in November and are the sharpest yet.
 16. **`max_backfill_days` bounds only a series that has never spawned.** One with a
     `last_spawned_for` resumes from that stamp however long the runner was down —
     proven by a run with `max_backfill_days=0` creating three old rows. The parameter
-    does not do what its name says (task 221).
+    does not do what its name says (task 221). **Fixed 2026-11-12 by `7177270`.** The
+    bound now applies to every fixed series, and the skipped dates are discarded and
+    recorded.
 17. **`pa_recurrence_preview` cannot verify what the engine will do.** It ignores
     `last_spawned_for` and anchors `after_completion` differently from `run()`. A brief
     prescribed it as the verification; it is a *verification that measures something
@@ -287,6 +309,16 @@ first thirteen are below; 14–21 arrived in November and are the sharpest yet.
     wiring on shadow, a mutant run was checked with `grep FAIL`. The mutant crashed
     before any check (the copied tree lacked `docs/`), printed no `FAIL`, and read as
     green. Caught by comparing exit codes. An empty grep is not a passing test.
+22. **A grep count expected 1 and got 3** (`BACKFILL_AND_DEADLINE_BRIEF`). The trigger
+    name `task_hard_deadline_guard` is a substring of its function's name
+    `tg_task_hard_deadline_guard`. Benign, but it's the same shape as correction 20:
+    grep for the thing itself (`create trigger task_hard_deadline_guard`), not for a
+    string that other things also contain.
+23. **Live config goes live at the pull, not the restart.** The same brief said running
+    code stays old until the restart. True for Python, but `task-agent-brief.md` is
+    re-read on every check-in, so its new rule was live from the pull (16:08), two
+    minutes before the restart. No fire ran in between. A brief that changes the agent
+    brief and code together must treat the pull as the deploy for the former.
 
 ### Correction 8 in full, because the shape of it matters
 
@@ -401,9 +433,10 @@ snapshot below is 2026-11-12; `claude/claude-code-handoff.md` §10 has the full 
 - **231** — two other services on futileassistant answer on the LAN: an
   unauthenticated uvicorn app on `:8000` (probably the album catalog) and Apache on
   `:80`. Same question 219 settled for the MCP server; exposure is Andre's decision.
-- **221, 227** — two places where a protection does not apply as widely as its name
-  suggests: `max_backfill_days`, and `hard_deadline` being enforced in one path of
-  three.
+- **The Google Tasks importer bypasses `repo.py`** (found by the 007 deployment, not yet
+  a task). On re-import it overwrites `status` and `due_on` on every task it imported
+  before, resetting Andre's own status changes to `inbox`. Since 007, some re-imports
+  would also die on an uncaught 22023. It is run by hand only; last run 2026-09-23.
 - **217** — until shopping phase 2, asking the bot to add to a list makes it reach for
   `pa_task_add`.
 

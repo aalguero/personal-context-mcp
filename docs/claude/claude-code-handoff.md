@@ -73,8 +73,9 @@ futile-pa/
                               is not in git; the agent's is in assistant/systemd/
   migrations/                 001_core, 002_reference_data, 003_situation_fit,
                               004_shopping, 005_overdue_and_defer,
-                              006_deterministic_order
-  tests/test_smoke.py         70 checks; refuses any DB but pa_verify / pa_scratch*
+                              006_deterministic_order,
+                              007_hard_deadline_guard
+  tests/test_smoke.py         93 checks; refuses any DB but pa_verify / pa_scratch*
   tests/test_shopping.py      95 checks, same guard
   tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
 docs/claude/task-agent-brief.md   the agent's own instructions — LIVE CONFIG, see §7
