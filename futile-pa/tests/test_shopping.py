@@ -81,6 +81,38 @@ def backlog() -> dict:
     }
 
 
+def first_diff(a, b, path: str = "$") -> str:
+    """Where two snapshot values first differ, as 'path: a != b'. Empty if equal.
+
+    Before 2026-11-11 a failure printed the first 60 characters of each side.
+    Both started '{"connection_due": [...', so a real failure (ledger-213-report
+    §5.2) could not be read at all. JSON strings are parsed back so the path
+    points inside them, e.g. $.top_next[7].id: 101 != 96.
+    """
+    if isinstance(a, str) and isinstance(b, str) and a[:1] in "[{" and b[:1] in "[{":
+        try:
+            a, b = json.loads(a), json.loads(b)
+        except ValueError:
+            pass
+    if a == b:
+        return ""
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            if k not in a or k not in b:
+                return f"{path}.{k}: present only in {'after' if k not in a else 'before'}"
+            d = first_diff(a[k], b[k], f"{path}.{k}")
+            if d:
+                return d
+    if isinstance(a, list) and isinstance(b, list):
+        for i, (x, y) in enumerate(zip(a, b)):
+            d = first_diff(x, y, f"{path}[{i}]")
+            if d:
+                return d
+        if len(a) != len(b):
+            return f"{path}: length {len(a)} != {len(b)}"
+    return f"{path}: {json.dumps(a, default=str)[:200]} != {json.dumps(b, default=str)[:200]}"
+
+
 call = shop.dispatch
 
 # ---------------------------------------------------------------------------
@@ -97,6 +129,13 @@ check("all descriptions non-trivial", all(len(t["description"]) > 80 for t in sh
 # ---------------------------------------------------------------------------
 section("Twenty items, and the backlog does not move")
 before = backlog()
+# Control, before any shopping write: if two snapshots of unchanged data
+# differ, a later "backlog unchanged" failure would blame shopping for
+# nondeterminism in the backlog itself. Ties at a LIMIT did exactly that
+# until migration 006 and the id tie-breaks in repo.daily_brief.
+again = backlog()
+check("backlog() is deterministic on unchanged data", before == again,
+      next((f"{k}: {first_diff(before[k], again[k])}" for k in before if before[k] != again[k]), ""))
 seed = [
     ("milk", "grocery", "dairy", "1 gal", None, None, None),
     ("eggs", "grocery", "dairy", "a dozen", None, None, None),
@@ -132,8 +171,7 @@ check("three categories+", db.value("select count(distinct category) from pa.sho
 check("two lists created implicitly", db.value("select count(*) from pa.shopping_list") == 2)
 after = backlog()
 for k in before:
-    check(f"backlog unchanged: {k}", before[k] == after[k],
-          f"before={str(before[k])[:60]} after={str(after[k])[:60]}")
+    check(f"backlog unchanged: {k}", before[k] == after[k], first_diff(before[k], after[k]))
 
 # ---------------------------------------------------------------------------
 section("Lists are created visibly")
@@ -333,7 +371,7 @@ check("an implicit list has no default category, so one is still required",
 section("And after all of that, the backlog still has not moved")
 final = backlog()
 for k in before:
-    check(f"backlog unchanged: {k}", before[k] == final[k])
+    check(f"backlog unchanged: {k}", before[k] == final[k], first_diff(before[k], final[k]))
 
 print(f"\n{'=' * 60}")
 print(f"{passed} passed, {len(failed)} failed")

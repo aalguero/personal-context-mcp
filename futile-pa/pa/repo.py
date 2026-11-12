@@ -623,7 +623,8 @@ def log_contact(person: Any, on: str | None = None, how: str | None = None,
 
 def connection_due(db: Db | None = None) -> list[dict]:
     db = db or get_db()
-    return db.rows("select * from pa.v_connection_due")
+    return db.rows("select * from pa.v_connection_due"
+                   " order by never_logged desc, overdue_days desc nulls last, id")
 
 
 def person_list(due_only: bool = False, db: Db | None = None) -> list[dict]:
@@ -783,7 +784,7 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
         """select id, title, project_name, due_on, hard_deadline, importance,
                   effort_minutes, contexts, (%s::date - due_on) as days_late
              from pa.v_overdue
-            order by hard_deadline desc, due_on limit 20""",
+            order by hard_deadline desc, due_on, id limit 20""",
         (d,),
     )
 
@@ -792,7 +793,7 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
                   importance, effort_minutes, energy, contexts, score
              from pa.v_scored
             where due_on = %s::date or scheduled_for = %s::date or due_at::date = %s::date
-            order by hard_deadline desc, due_at nulls last, score desc""",
+            order by hard_deadline desc, due_at nulls last, score desc, id""",
         (d, d, d),
     )
 
@@ -801,7 +802,7 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
              from pa.v_task
             where status not in ('done','dropped')
               and due_on > %s::date and due_on <= %s::date + %s
-            order by due_on limit 20""",
+            order by due_on, id limit 20""",
         (d, d, horizon_days),
     )
 
@@ -813,7 +814,7 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
              from pa.v_scored
             where (due_on is null or due_on > %s::date)
               and (scheduled_for is null or scheduled_for <> %s::date)
-            order by score desc limit 8""",
+            order by score desc, id limit 8""",
         (d, d),
     )
 
@@ -821,23 +822,25 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
         """select id, title, waiting_on_name, waiting_on_note, waiting_since,
                   (%s::date - waiting_since) as days_waiting, project_name
              from pa.v_task where status = 'waiting'
-            order by waiting_since nulls last limit 15""",
+            order by waiting_since nulls last, id limit 15""",
         (d,),
     )
 
     brief["inbox"] = db.rows(
         """select id, title, created_at from pa.v_task
-            where status = 'inbox' order by created_at limit 15"""
+            where status = 'inbox' order by created_at, id limit 15"""
     )
 
     brief["stalled_projects"] = cap(db.rows(
         "select id, name, path, kind, importance, open_tasks, last_activity_at from pa.v_stalled_projects"
+        " order by importance desc, coalesce(last_activity_at, '-infinity'::timestamptz), id"
     ), 8)
 
     brief["review_due"] = cap(db.rows(
         """select id, name, path, kind, review_overdue_days, never_reviewed,
                   last_reviewed_on, review_cadence_days, open_tasks
-             from pa.v_review_due"""
+             from pa.v_review_due
+            order by never_reviewed desc, review_overdue_days desc nulls last, id"""
     ), 8)
 
     brief["connection_due"] = cap(connection_due(db=db), 8)
@@ -846,7 +849,7 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
         """select id, title, project_name, defer_count, due_on, importance
              from pa.v_task
             where status not in ('done','dropped') and defer_count >= 3
-            order by defer_count desc limit 8"""
+            order by defer_count desc, id limit 8"""
     )
 
     brief["counts"] = db.row(

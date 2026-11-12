@@ -58,6 +58,22 @@ from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
 from pa.shop import SHOP_TOOLS, SHOP_TOOL_NAMES, dispatch as shop_dispatch
 from pa.db import Db, set_db
 
+# The check-in agent's code-owned task_agent keys (task 213). Loaded by file
+# path, not imported as assistant.agent_keys: importing the assistant package
+# runs its __init__, which calls set_db() and would replace this server's
+# database handle. Fail closed, like the futile-pa check above: a server that
+# silently lost this guard would let a chat session overwrite the record the
+# 24-hour rule and three strikes run on, which is how prose got there before.
+import importlib.util as _ilu
+_AGENT_KEYS_PATH = Path(FUTILE_PA_PATH) / "assistant" / "agent_keys.py"
+try:
+    _spec = _ilu.spec_from_file_location("_agent_keys", _AGENT_KEYS_PATH)
+    agent_keys = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(agent_keys)
+    agent_keys.refusal  # noqa: B018 — fail here, not on first use
+except Exception as _e:
+    sys.exit(f"cannot load {_AGENT_KEYS_PATH} ({type(_e).__name__}) — the task_agent guard is required")
+
 # Streamable HTTP transport (bundled with mcp >= 1.0)
 try:
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -286,6 +302,9 @@ def build_server(store: ContextStore) -> Server:
             category = arguments["category"]
             key      = arguments["key"]
             value    = arguments["value"]
+            refused = agent_keys.refusal(category, key)
+            if refused:
+                return [TextContent(type="text", text=refused)]
             store.set(category, key, value)
             return [TextContent(type="text", text=f"✓ Saved `{category}.{key}`.")]
 
@@ -301,6 +320,9 @@ def build_server(store: ContextStore) -> Server:
         if name == "delete_context":
             category = arguments["category"]
             key      = arguments.get("key")
+            refused = agent_keys.refusal(category, key, whole_category=key is None)
+            if refused:
+                return [TextContent(type="text", text=refused)]
             deleted  = store.delete(category, key)
             if not deleted:
                 target = f"`{category}.{key}`" if key else f"category `{category}`"

@@ -22,7 +22,9 @@ So code writes them, at the moment each one becomes true:
 All four live in the existing `task_agent` category under their existing
 names, so the brief's rules read them where they always have. The model may
 read them and may not write them: toolset.dispatch() asks refuse_model_write()
-first. Everything else in `task_agent` (last_run_at, notes) stays the model's.
+first, and server.py's set_context and delete_context refuse the same keys
+(agent_keys.py holds the one list). Everything else in `task_agent`
+(last_run_at, notes) stays the model's.
 
 Deliberately imports nothing heavy: the db handle is passed in, so the tests
 can run without Postgres. Task ids come from the same pattern the
@@ -37,10 +39,8 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from . import context_store
+from .agent_keys import CATEGORY, CODE_OWNED_KEYS, refusal
 from .task_ids import extract_task_ids
-
-CATEGORY = "task_agent"
-CODE_OWNED_KEYS = frozenset({"asked_recently", "open_questions", "last_reply_at", "unanswered_runs"})
 # Where prose that the model wrote into a code-owned key before task 213 is
 # moved on first contact, rather than deleted: it is the model's own notes.
 LEGACY_KEY = "notes_pre_213"
@@ -81,13 +81,8 @@ def refuse_model_write(category: Any, key: Any) -> dict | None:
     Returned to the model as the tool result, not raised: the run should
     continue, and the model should learn from the message why the write was refused.
     """
-    if category == CATEGORY and key in CODE_OWNED_KEYS:
-        return {"error": (
-            f"task_agent.{key} is written by code, not by you (task 213): it is "
-            "recorded automatically when a check-in is delivered or Andre replies. "
-            "Read it; do not write it. Put your own observations in task_agent.notes."
-        )}
-    return None
+    msg = refusal(category, key)
+    return {"error": msg} if msg else None
 
 
 def _adopt_legacy(state: dict, now: datetime) -> dict:

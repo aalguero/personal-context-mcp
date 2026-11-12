@@ -216,6 +216,16 @@ for cat, k in (("task_agent", "last_run_at"), ("task_agent", "notes"),
                ("task_agent_watchdog", "last_run_at"), ("other", "asked_recently")):
     check(f"{cat}.{k} allowed", ledger.refuse_model_write(cat, k) is None)
 
+section("The MCP server's refusal (agent_keys.refusal, loaded by path in server.py)")
+agent_keys = importlib.import_module(f"{PKG}.agent_keys")
+check("the ledger uses the shared list", ledger.CODE_OWNED_KEYS is agent_keys.CODE_OWNED_KEYS)
+check("deleting all of task_agent is refused",
+      "Refused" in (agent_keys.refusal("task_agent", None, whole_category=True) or ""))
+check("deleting one code-owned key is refused", agent_keys.refusal("task_agent", "unanswered_runs") is not None)
+check("deleting a model key is allowed", agent_keys.refusal("task_agent", "notes") is None)
+check("deleting another whole category is allowed",
+      agent_keys.refusal("health", None, whole_category=True) is None)
+
 # ---------------------------------------------------------------------------
 section("Isolation")
 after = REAL_STORE.stat().st_mtime_ns if REAL_STORE.exists() else None
