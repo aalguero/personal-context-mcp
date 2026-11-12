@@ -24,6 +24,8 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any, Iterable, Sequence
 
+import psycopg
+
 from .db import Db, get_db
 
 # Columns a caller may set on a task. Everything else — completed_at,
@@ -262,8 +264,15 @@ def task_complete(task_id: int, note: str | None = None, db: Db | None = None) -
 
 
 def task_defer(task_id: int, until: str, reason: str | None = None, db: Db | None = None) -> dict:
+    """Deferring a soft-dated task moves its due_on; a hard deadline or a date
+    that is not in the future is refused by pa.defer_task (migration 005).
+    Those refusals come back as ValueError, so dispatch() returns them as
+    {"error": ...} that the caller -- often the check-in agent -- can act on."""
     db = db or get_db()
-    db.row("select pa.defer_task(%s, %s, %s)", (task_id, until, reason))
+    try:
+        db.row("select pa.defer_task(%s, %s, %s)", (task_id, until, reason))
+    except psycopg.errors.InvalidParameterValue as exc:
+        raise ValueError(exc.diag.message_primary or str(exc)) from None
     return task_get(task_id, db=db)
 
 
@@ -766,13 +775,16 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
 
     brief: dict[str, Any] = {"for_date": d}
 
+    # pa.v_overdue is the one definition of overdue (migration 005): not
+    # someday, not deferred unless hard_deadline. It is evaluated against
+    # current_date, so for a for_date other than today this section is still
+    # "overdue now" -- the rule is not restated here to make it date-relative.
     brief["overdue"] = db.rows(
         """select id, title, project_name, due_on, hard_deadline, importance,
                   effort_minutes, contexts, (%s::date - due_on) as days_late
-             from pa.v_task
-            where status not in ('done','dropped') and due_on < %s::date
+             from pa.v_overdue
             order by hard_deadline desc, due_on limit 20""",
-        (d, d),
+        (d,),
     )
 
     brief["today"] = db.rows(
@@ -843,13 +855,12 @@ def daily_brief(for_date: str | None = None, horizon_days: int = 7,
              (select count(*) from pa.v_actionable) as actionable,
              (select count(*) from pa.v_task where status = 'inbox') as inbox,
              (select count(*) from pa.v_task where status = 'waiting') as waiting,
-             (select count(*) from pa.v_task where status not in ('done','dropped')
-                and due_on < %s::date) as overdue,
+             (select count(*) from pa.v_overdue) as overdue,
              (select count(*) from pa.task where status = 'done'
                 and completed_at >= %s::date - 7) as done_last_7d,
              (select count(*) from pa.task where status = 'done'
                 and completed_at::date = %s::date) as done_today""",
-        (d, d, d),
+        (d, d),
     )
 
     if record:

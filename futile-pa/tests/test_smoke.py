@@ -237,15 +237,27 @@ check("hard deadline outranks a soft one at similar distance",
       f"mercer={scores[mercer['id']]} twin={scores[mercer_soft_twin['id']]}")
 
 section("Deferral is counted and logged")
-before = repo.task_get(mercer["id"])["defer_count"] if "defer_count" in repo.task_get(mercer["id"]) else 0
-repo.task_defer(mercer["id"], D(14), "waiting on the ADV Part 2 before marking it up")
-repo.task_defer(mercer["id"], D(21), "still waiting")
-after = repo.task_get(mercer["id"])
+# A hard deadline cannot be deferred (migration 005): refused, nothing changed.
+hard_before = repo.task_get(mercer["id"])
+refused = dispatch("pa_task_defer", {"task_id": mercer["id"], "until": D(14)})
+check("hard-deadline defer refused as an error", "hard deadline" in str(refused.get("error", "")), str(refused))
+check("refused defer changed nothing", repo.task_get(mercer["id"]) == hard_before)
+past = dispatch("pa_task_defer", {"task_id": mercer_soft_twin["id"], "until": D(0)})
+check("defer to today refused", "after today" in str(past.get("error", "")), str(past))
+
+twin = mercer_soft_twin["id"]
+before = repo.task_get(twin).get("defer_count", 0)
+repo.task_defer(twin, D(14), "waiting on the ADV Part 2 before marking it up")
+repo.task_defer(twin, D(21), "still waiting")
+after = repo.task_get(twin)
 check("defer_count incremented", after.get("defer_count") == before + 2, str(after.get("defer_count")))
 check("deferred task hidden from actionable", after["is_deferred"] is True)
-hist = repo.task_history(mercer["id"])
+check("defer moved the soft due date", after.get("due_on") == D(21), str(after.get("due_on")))
+hist = repo.task_history(twin)
 check("deferrals in the event log", sum(1 for e in hist if e["action"] == "deferred") == 2,
       str([e["action"] for e in hist]))
+check("a defer that moves due_on is not also logged as an edit",
+      not any(e["action"] == "edited" for e in hist), str([e["action"] for e in hist]))
 check("reason captured", any("ADV Part 2" in (e.get("note") or "") for e in hist))
 
 section("Recurrence — fixed vs after completion")
@@ -335,6 +347,12 @@ check("brief has every section",
 check("overdue picked up the vet booking",
       any("Rosco" in t["title"] for t in brief["overdue"]), str(brief["overdue"]))
 check("days_late computed", all(t["days_late"] > 0 for t in brief["overdue"]))
+parked = repo.task_add("Parked overdue fixture", status="someday", due_on=D(-5))
+brief2 = dispatch("pa_daily_brief", {})
+check("someday is never overdue", not any(t["id"] == parked["id"] for t in brief2["overdue"]))
+check("brief overdue is exactly v_overdue",
+      sorted(t["id"] for t in brief2["overdue"])
+      == [r["id"] for r in db.rows("select id from pa.v_overdue order by id")])
 check("waiting section populated", len(brief["waiting"]) >= 1)
 check("inbox section populated", len(brief["inbox"]) >= 1)
 check("counts present", brief["counts"]["open_total"] > 10, json.dumps(brief["counts"]))
