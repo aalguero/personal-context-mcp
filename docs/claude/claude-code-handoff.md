@@ -34,7 +34,7 @@ connector. That asymmetry is why briefs exist (§3).
   that runs commands on shadow cannot reach `~/.ssh` (protected location), so
   `git ls-remote` there fails with `Host key verification failed`. Andre pushes and
   pulls from his own terminal; the server agent pushes from futileassistant.
-- **HEAD as of 2026-11-11:** `c4a7169`.
+- **HEAD as of 2026-11-12:** `891c57a`, deployed.
 
 **Layout** (server path `/home/dremon/tools/personal-context-mcp/`):
 
@@ -50,6 +50,7 @@ futile-pa/
     recurrence.py             run(), preview(), occurrence expansion
     db.py
   assistant/                  the standalone agent — NOT imported by the MCP server
+                              (server.py loads only agent_keys.py, by file path)
     main.py                   starts the Signal bridge thread, then the scheduler
     checkin.py                run_once(), heartbeat_line(); reads the brief fresh
     signal_bridge.py          send/receive, history, delivery receipts
@@ -57,6 +58,9 @@ futile-pa/
     watchdog.py               in-process staleness checks
     context_store.py          context.json read-modify-write
     quickask.py, agent_loop.py, toolset.py, sensitivity_filter.py
+    ledger.py                 code-owned task_agent keys: asked, replied, strikes (213)
+    agent_keys.py             the list of those keys; no imports, shared with server.py
+    task_ids.py               the one task-id pattern (filter and ledger)
   scripts/
     backup.sh                 nightly; §12 external_watchdog, §13 deadman ping
     external_watchdog.py      five assertions, alerts via the Signal container
@@ -65,9 +69,11 @@ futile-pa/
     backup_alerts.py, migrate.py, prune_backups.py
     systemd/                  unit files, byte-identical to the installed copies
   migrations/                 001_core, 002_reference_data, 003_situation_fit,
-                              004_shopping, 005_overdue_and_defer
+                              004_shopping, 005_overdue_and_defer,
+                              006_deterministic_order
   tests/test_smoke.py         70 checks; refuses any DB but pa_verify / pa_scratch*
-  tests/test_shopping.py      94 checks, same guard
+  tests/test_shopping.py      95 checks, same guard
+  tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
 docs/claude/task-agent-brief.md   the agent's own instructions — LIVE CONFIG, see §7
 docs/architecture/                design records
 CLAUDE.md                     repo-level orientation
@@ -126,7 +132,7 @@ format, not a failure of it.
 > **A change is not verified by the system still working. It is verified by proving it
 > controls something.**
 
-Seventeen instances of the opposite have been found on this project. `FUTILE_PA_PATH`
+Twenty-one instances of the opposite have been found on this project. `FUTILE_PA_PATH`
 sat inert in `.env` because it was read three lines before `load_dotenv()`. A dedicated
 SSH key was inert from birth. Remote retention deleted one file of five while reporting
 `ok`. The B2 upload reported "skipped (not configured)" over code that could never have
@@ -296,14 +302,12 @@ Live source is the database. `claude/working-agreement.md` has the audit queries
 project 18 is Build, area 37 is Operations.
 
 **Totals:** 226 tasks, 127 open. 37 projects, 10 recurrences, 18 contexts, 9
-situations, 9 people, 9 goals. Migrations 001–005 applied.
+situations, 9 people, 9 goals. Migrations 001–006 applied.
 
 | id | Stream | Imp | Title |
 |---|---|---|---|
-| 213 | Build | 5 | The agent asks questions without recording that it asked them |
 | 162 | Ops | 4 | Data cleanup needing SQL or a brief |
 | 169 | Ops | 4 | Retag for season and low energy |
-| 196 | Ops | 4 | Delete `.env.bak-20261104-110206` — holds the compromised password |
 | 217 | Build | 4 | Until phase 2, asking the bot for a shopping list creates a task |
 | 219 | Ops | 4 | Decide: the MCP server listens on `0.0.0.0:8765` |
 | 221 | Build | 4 | `max_backfill_days` does not bound a series that has a stamp |
@@ -313,7 +317,7 @@ situations, 9 people, 9 goals. Migrations 001–005 applied.
 | 207 | Build | 3 | An alarm of last resort for when Signal itself is the failure |
 | 209 | Ops | 3 | How the Signal container is run exists only in briefs |
 | 212 | Build | 3 | Shopping lists — phases 2 to 4 |
-| 218 | Ops | 3 | Renumber the unbuilt "Migration 004" spec to **006** |
+| 218 | Ops | 3 | Renumber the unbuilt "Migration 004" spec to **007** (006 taken 11-11) |
 | 222 | Ops | 3 | `pa_recurrence_preview` lies about what the engine will do |
 | 223 | Build | 3 | `context.json` has four writers and a per-process lock |
 | 226 | Ops | 3 | Project health and `brief["soon"]` still compute overdue by hand |
@@ -322,6 +326,8 @@ situations, 9 people, 9 goals. Migrations 001–005 applied.
 | 125 | Build | 2 | Three backup-alert refinements |
 | 183 | Build | 2 | `pa_task_update` has no `depends_on` |
 | 198 | Build | 2 | Signal hardening leftovers |
+
+**Closed 2026-11-11 → 12, with proof:** 196, 213.
 
 **Closed in the week of 2026-11-06, all with proof:** 124, 161, 178, 182, 184, 188,
 194, 195, 197, 199, 201, 204, 205, 211.

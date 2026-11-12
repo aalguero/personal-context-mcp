@@ -1,6 +1,7 @@
 # Deployment status — futile-pa
 
-Last updated: **2026-11-11.** Live, connected, fully triaged, in version control.
+Last updated: **2026-11-12.** Live, connected, fully triaged, in version control.
+What changed since 11-11: see *What changed 2026-11-11 → 12*, below.
 
 **The backup project is complete** (verified dumps, encryption the server cannot
 reverse, a proven restore, an off-machine copy on the Pi, a compliance-locked off-site
@@ -59,7 +60,7 @@ is how a restore was independently verified.
 
 | | |
 |---|---|
-| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `c4a7169`) |
+| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `891c57a`, deployed 2026-11-11 22:30) |
 | futile-pa | `/home/dremon/tools/personal-context-mcp/futile-pa` — inside the repo. Old tree at `/home/dremon/futile-pa.pre-git` |
 | Scripts | `futile-pa/scripts/` — `backup.sh`, `external_watchdog.py`, `recurrence_runner.py`, `deadman_ping.py`, `backup_alerts.py`, `prune_backups.py`, `migrate.py`. **Note the `futile-pa/` prefix** |
 | Interpreter | `/home/dremon/tools/personal-context-mcp/.venv-new/bin/python` — Python 3.13.5. **Not** `futile-pa/.venv-new` |
@@ -70,13 +71,14 @@ is how a restore was independently verified.
 | Transport | streamable HTTP at `/mcp` only |
 | Public URL | `https://futileassistant.cormorant-barb.ts.net/mcp` via Tailscale Funnel (`/ → 127.0.0.1:8765`) |
 | Auth | shared secret, ASGI middleware, all paths, **404 on failure**, fail-closed at startup |
-| Bind | **`0.0.0.0:8765`, not `127.0.0.1`** — long-standing, LAN-reachable behind the token. Decision open: task 219 |
+| Bind | **`0.0.0.0:8765`, not `127.0.0.1`** — long-standing, LAN-reachable behind the token. Decision open: task 219. **Something relies on it:** the Claude Code connector on shadow (`~/.claude.json`, `personal-context`) points at `100.108.86.16:8765` directly over the tailnet, not at the Funnel URL. Found 2026-11-12 as two `GET /mcp` 404s from shadow at each MCP restart (that is the client reconnecting; tools work). Binding to localhost would cut that session off, so 219 must move it to the Funnel URL first |
 | Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed |
-| Migrations | **001–005 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer. `pa.schema_migration` is keyed by **filename**, not version |
+| Migrations | **001–006 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004" is now **007** (task 218) |
 | Agent | fires 07:48 / 11:48 / 15:48 / 19:48 America/New_York. `main()` starts the Signal bridge as a daemon thread, then the scheduler |
 | Signal | `signal-cli-rest-api` in Docker, image pinned by digest, `MODE=normal`, `--log-driver none`, bound `127.0.0.1:8080`. **A separately registered account**, not a linked device. Discoverability off |
 | Monitoring | 5 external watchdog assertions + 2 dead-man checks + delivery receipts + a heartbeat on every fire. See `architecture/monitoring.md` |
-| Test suites | `test_smoke.py` **70** checks, `test_shopping.py` **94**. Both refuse any database but `pa_verify` / `pa_scratch*` |
+| Test suites | `test_smoke.py` **70** checks, `test_shopping.py` **95** (94 until 11-11; the 95th checks the backlog snapshot is deterministic). Both refuse any database but `pa_verify` / `pa_scratch*`. `test_ledger.py` **42**, no database, refuses to run unless the context store is redirected to a temp dir |
+| Agent's own record | `task_agent.asked_recently`, `open_questions`, `last_reply_at`, `unanswered_runs` are **written by code** (`assistant/ledger.py`, task 213). Model writes to them are refused by the agent's `toolset.dispatch` **and** by `server.py`'s `set_context` / `delete_context`. The list is in `assistant/agent_keys.py`; `server.py` loads it by file path and **exits at startup** if it cannot |
 | Disk encryption | **Server: NONE** (task 112). **shadow: YES** — and shadow holds the age private key, which is what makes the asymmetry hold. See `encryption-at-rest.md` |
 | Tailnet | futileassistant `100.108.86.16` / LAN `192.168.86.35`; shadow (DNS `darkslip`) `100.102.50.58` / `192.168.86.40`; vocalassistant `100.75.132.20` / `192.168.86.251`; homeassistant `100.96.213.73`; pixelatedandroid `100.122.109.81` |
 
@@ -91,6 +93,38 @@ Funnel). Details in `voice-assistant.md`.
 **Load-bearing detail:** `/.well-known/*` must keep returning 404. Anything
 OAuth-shaped there makes claude.ai attempt dynamic client registration, which fails and
 already cost a day.
+
+## What changed 2026-11-11 → 12
+
+The first stretch of work done from Claude Code on shadow rather than from the chat.
+Four briefs, four reports, every claim checked from the shadow side afterwards.
+
+1. **Task 196 — the pre-rotation `.env` backup is shredded** (`shred-env-bak-report.md`).
+   The old password was proven dead **with a control**: a nonsense password failed the
+   same way and the current one succeeded on the same route. A sweep for every live
+   secret found each only in its own `.env`, so nothing needed rotating; two `.env~`
+   editor copies were also removed.
+2. **Task 213 — the check-in's record is written by code** (`463391f`,
+   `ledger-213-report.md`). Proven live end to end: Andre's message turned the prose
+   `last_reply_at` into a timestamp; the 07:48 run on 11-12 asked about task 149 and the
+   ask was recorded at 07:49:54; his 09:39 reply reset the strikes; the 11:48 run cited
+   `open_questions` and declined to re-ask 149 under the 24-hour rule. Prose the model
+   had written into those keys was moved intact to `task_agent.notes_pre_213`.
+3. **The same guard in the MCP server** (`891c57a`, `guard-and-ties-report.md`), because
+   the chat's `set_context` is how the prose got there. Proven live 11-12 17:07Z: a write
+   of `task_agent.unanswered_runs` through the claude.ai connector was refused, and the
+   store's last write stayed at the 11:48 check-in's 16:49:31Z stamp.
+4. **Ranking ties broken on id** (`891c57a`, migration 006 plus `pa/repo.py`). Nothing
+   broke ties at a `LIMIT`, so which tied rows made `suggest`'s 25 or the brief's
+   `top_next` 8 was undefined, and the same data could give two briefs. Measured on
+   production: **2 tied pairs out of id order before 006, 0 after.** Probably what made
+   `test_shopping.py` fail 4 checks once on 11-11 and then pass; that run was never
+   reproduced, so it stays probable. The suite now passes 95/0 five times on fresh
+   restores and prints the first differing path when a comparison fails.
+5. The task-id pattern shared by the sensitivity filter and the ledger
+   (`assistant/task_ids.py`) now also matches the brief's id-numbered `171)` form.
+   Before, such a line was invisible to the filter and a sensitive task numbered that
+   way would have gone out unredacted.
 
 ## What changed in the week of 2026-11-06
 
@@ -186,8 +220,8 @@ was meant to be most useful.
 
 ## Corrections that came back from the machine
 
-**Seventeen now, and every one came from data rather than from more reasoning.** The
-first thirteen are below; 14–17 arrived in November and are the sharpest yet.
+**Twenty-one now, and every one came from data rather than from more reasoning.** The
+first thirteen are below; 14–21 arrived in November and are the sharpest yet.
 
 1. Broken venv was a typo'd path baked into pip's console scripts
    (`personal-cont**a**ct-mcp`), not a Python upgrade.
@@ -242,6 +276,17 @@ first thirteen are below; 14–17 arrived in November and are the sharpest yet.
     so a conclusion was drawn from a truncated listing. Same shape as correction 13 and
     the 11-04 `grep -oE '^[A-Z_]+='` miss: *a listing that silently stops short is not
     evidence of absence.*
+20. **A migration check that could not fail.** `GUARD_AND_TIES_BRIEF` verified 006 with
+    `position('v.id' in pg_get_functiondef(...)) > 0`, but `v.id` was already in 003's
+    select list, so the check printed `t` against the old function too. The executing
+    Claude caught it. The tie probe (2 → 0) was the real evidence. Same shape as
+    correction 17: *a verification that measures something other than what it claims.*
+    Check for the change itself, here `nulls last,` followed by `v.id`, or better, for
+    its effect.
+21. **A stubbed test that crashed looked like a pass.** While proving the task 213
+    wiring on shadow, a mutant run was checked with `grep FAIL`. The mutant crashed
+    before any check (the copied tree lacked `docs/`), printed no `FAIL`, and read as
+    green. Caught by comparing exit codes. An empty grep is not a passing test.
 
 ### Correction 8 in full, because the shape of it matters
 
@@ -266,7 +311,7 @@ only because the old directory still existed at the moment of the restart. It wa
 renamed to `.pre-git` afterwards — arming a landmine the next restart would trigger,
 which happened a week later during an unrelated password rotation.
 
-### The pattern, now seen seventeen times
+### The pattern, now seen twenty-one times
 
 | | The change | Why it looked fine | What actually proved it |
 |---|---|---|---|
@@ -344,16 +389,18 @@ to whatever it is pointed at will eventually be pointed at production.
 ## Open items
 
 Live source of truth is the database — project 18 (Build) and area 37 (Operations). The
-snapshot below is 2026-11-11; `claude/claude-code-handoff.md` §10 has the full table.
+snapshot below is 2026-11-12; `claude/claude-code-handoff.md` §10 has the full table.
+**Closed 11-11 → 12:** 196, 213.
 
 **Highest value:**
 
-- **213** — the agent asks questions without recording that it asked them, so the
-  24-hour no-repeat rule and the unanswered-run escalation both run on a record nothing
-  writes.
-- **196** — delete `.env.bak-20261104-110206`, which holds the compromised musicbrainz
-  password. Five minutes.
-- **219** — decide the `0.0.0.0:8765` bind.
+- **219** — decide the `0.0.0.0:8765` bind. Note the Claude Code connector on shadow
+  depends on it (Current state, Bind row).
+- **Found 11-12, no task yet:** the event log records the agent's edits as `actor=andre`
+  (noted in four reports now). And `repo._resolve`'s exact-name branch takes the first
+  of several same-named projects or people silently; only `slug` is unique, and there
+  are no duplicate names today, so it is latent. `task_list`'s non-default orderings
+  still have no id tie-break.
 - **221, 227** — two places where a protection does not apply as widely as its name
   suggests: `max_backfill_days`, and `hard_deadline` being enforced in one path of
   three.
@@ -366,7 +413,8 @@ snapshot below is 2026-11-11; `claude/claude-code-handoff.md` §10 has the full 
 - **207** — an alarm about Signal that does not travel over Signal.
 - **206, 223** — the Signal history grows without bound; `context.json` has four writer
   processes and a per-process lock.
-- **218** — the unbuilt "Migration 004" spec must be renumbered to **006**.
+- **218** — the unbuilt "Migration 004" spec must be renumbered to **007**: 006 was
+  taken by `006_deterministic_order` on 11-11. The task's title still says 005.
 - **222, 226** — recurrence preview lies; two places still compute overdue by hand.
 - **162, 169** — data cleanup and retagging for season and low energy.
 
