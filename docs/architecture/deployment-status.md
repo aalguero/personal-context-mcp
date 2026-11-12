@@ -60,7 +60,7 @@ is how a restore was independently verified.
 
 | | |
 |---|---|
-| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `7177270`, deployed 2026-11-12 16:10) |
+| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `0facde4`, agent restarted 2026-11-12 17:14; MCP process still from `7177270` at 16:10, as nothing it runs changed) |
 | futile-pa | `/home/dremon/tools/personal-context-mcp/futile-pa` — inside the repo. Old tree at `/home/dremon/futile-pa.pre-git` |
 | Scripts | `futile-pa/scripts/` — `backup.sh`, `external_watchdog.py`, `recurrence_runner.py`, `deadman_ping.py`, `backup_alerts.py`, `prune_backups.py`, `migrate.py`. **Note the `futile-pa/` prefix** |
 | Interpreter | `/home/dremon/tools/personal-context-mcp/.venv-new/bin/python` — Python 3.13.5. **Not** `futile-pa/.venv-new` |
@@ -72,12 +72,12 @@ is how a restore was independently verified.
 | Public URL | `https://futileassistant.cormorant-barb.ts.net/mcp` via Tailscale Funnel (`/ → 127.0.0.1:8765`) |
 | Auth | shared secret, ASGI middleware, all paths, **404 on failure**, fail-closed at startup |
 | Bind | **`127.0.0.1:8765` only**, since 2026-11-12 14:23 (task 219, Andre's decision). Every client goes through Funnel. Unit in git: `futile-pa/scripts/systemd/personal-context-mcp.service` (`785a99a`). Proved from shadow: tailnet and LAN direct went from 404 to connection refused; Funnel still answers. The Claude Code connector on shadow (`~/.claude.json`, `personal-context`) uses the Funnel URL; from shadow that hostname resolves to the tailnet address and reaches tailscaled on 443, which forwards to 127.0.0.1. **In the access log, port `0` means "arrived through tailscaled"** (`X-Forwarded-For` carries no port); a real port means a direct connection, which now can only be localhost |
-| Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed |
+| Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed. **The agent has two registries** (since `0facde4`): the check-in holds 27 (25 `pa_*` + `get_context`/`set_context`), Signal replies hold 32 (those + the five `pa_shop_*`) |
 | Migrations | **001–007 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30), 007_hard_deadline_guard (2026-11-12 16:10). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004", then "007", must now be **008** (task 218), since 007 was taken by the next real migration |
 | Agent | fires 07:48 / 11:48 / 15:48 / 19:48 America/New_York. `main()` starts the Signal bridge as a daemon thread, then the scheduler |
 | Signal | `signal-cli-rest-api` in Docker, image pinned by digest, `MODE=normal`, `--log-driver none`, bound `127.0.0.1:8080`. **A separately registered account**, not a linked device. Discoverability off |
 | Monitoring | 5 external watchdog assertions + 2 dead-man checks + delivery receipts + a heartbeat on every fire. See `architecture/monitoring.md` |
-| Test suites | `test_smoke.py` **93** checks (70 until 11-12; 23 added for tasks 221 and 227), `test_shopping.py` **95** (94 until 11-11; the 95th checks the backlog snapshot is deterministic). Both refuse any database but `pa_verify` / `pa_scratch*`. `test_ledger.py` **42**, no database, refuses to run unless the context store is redirected to a temp dir |
+| Test suites | `test_smoke.py` **93** checks (70 until 11-12; 23 added for tasks 221 and 227), `test_shopping.py` **95** (94 until 11-11; the 95th checks the backlog snapshot is deterministic). Both refuse any database but `pa_verify` / `pa_scratch*`. `test_ledger.py` **42**, no database, refuses to run unless the context store is redirected to a temp dir. `test_toolset.py` **30** (since `0facde4`), which agent path holds the shop tools. It is the only DB suite that cleans up after itself, so it's safe to rerun on one restore |
 | Agent's own record | `task_agent.asked_recently`, `open_questions`, `last_reply_at`, `unanswered_runs` are **written by code** (`assistant/ledger.py`, task 213). Model writes to them are refused by the agent's `toolset.dispatch` **and** by `server.py`'s `set_context` / `delete_context`. The list is in `assistant/agent_keys.py`; `server.py` loads it by file path and **exits at startup** if it cannot |
 | Disk encryption | **Server: NONE** (task 112). **shadow: YES** — and shadow holds the age private key, which is what makes the asymmetry hold. See `encryption-at-rest.md` |
 | Tailnet | futileassistant `100.108.86.16` / LAN `192.168.86.35`; shadow (DNS `darkslip`) `100.102.50.58` / `192.168.86.40`; vocalassistant `100.75.132.20` / `192.168.86.251`; homeassistant `100.96.213.73`; pixelatedandroid `100.122.109.81` |
@@ -145,6 +145,27 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
      That type exists only in 7177270.
    - **Still pending:** the first live 03:00 runner on the new code. Expect `created 0`
      and no `discarded` line on 11-13 (Friday; nothing is due).
+7. **Task 212 phase 2: shopping over Signal, and only there** (`0facde4`, no migration,
+   `shop-phase2-report.md`, deployed 2026-11-12 17:14). Signal replies run through
+   `quickask.py` under `quick-ask-brief.md`, not the check-in. So 217's suggested fix,
+   a line in `task-agent-brief.md`, would have missed. `toolset.QUICKASK_TOOLS` (32) =
+   `ALL_TOOLS` (27) + the five `pa_shop_*`. The check-in keeps 27, and its `dispatch()`
+   doesn't route shop names. Both briefs say an item is never a task.
+   - On a production restore: toolset **30/0** twice, with counts identical before and
+     after (the suite cleans up by id floor). Smoke 93, ledger 42, shopping 95 twice.
+     The real `import assistant` built 27 and 32.
+   - Only the agent restarted (444942 → 524017). The MCP server stayed on 444827,
+     because the only change it runs is a docstring. Production `233|0|0` before and
+     after. Funnel 404.
+   - The pull and the restart were one second apart. §5 ran from a detached worktree,
+     so the live-config briefs never ran ahead of the code.
+   - `main.py`'s CLI `ask` path also calls `quickask.ask`, so it gets the shop tools too.
+     That is intended: it's on-demand, like Signal.
+   - **Still pending: Andre's live Signal test** (brief §6.3, add, read and remove
+     `zqprobe beans`). The registries are proven. The model choosing `pa_shop_add` over
+     `pa_task_add` is not. Production has no lists, so "grocery" must land as a
+     *category*. If the model passes it as a list name, `shop_add` creates a list
+     called "grocery". Check `pa.shopping_list` as well.
 
 ## What changed in the week of 2026-11-06
 
