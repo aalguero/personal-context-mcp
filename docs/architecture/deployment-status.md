@@ -179,10 +179,13 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
    - **Baseline left in the journal** (counted, never printed): 6 side-text lines,
      46 full replies (10-28 → 11-12 15:49), 17 tracebacks (14 from `Check-in run
      failed`, 3 unattributed, all 11-04 → 11-09).
-   - The journal is persistent, has **no retention configured** and uses 642.6M, so
-     these lines stay until the size cap rotates them. Purging is Andre's decision.
-   - **Still pending:** the 19:48 fire's `Check-in reply: N chars` line, the live proof.
-   - **Found, not fixed:** `notify.send()` appends **every** outbound message,
+   - The journal is persistent and has **no retention configured**, so these lines stay
+     until the size cap rotates them. The **user** journal is 177.2M. The 642.6M first
+     reported was probably every journal (inferred).
+   - **Live-proven** by four fires, 11-12 19:48 → 11-13 15:48
+     (`notify-and-purge-report.md`): one `Check-in reply: N chars` line each, no new
+     full-reply or traceback lines.
+   - **Found, then fixed in item 9:** `notify.send()` appended **every** outbound message,
      unfiltered, to `futile-pa/assistant/pending_notifications.log`, before it checks
      whether Signal is configured. The file is mode 664 in a 775 directory, 28 entries
      since 10-28, gitignored. That is the same content, in a file every local user
@@ -190,6 +193,32 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
    - Also found: `main()` calls `run_scheduler()` with no handler, so an exception that
      escapes the loop prints a full traceback via systemd's stderr capture. It handles
      no task content today, inferred.
+9. **`notify` keeps only undelivered messages** (`56d4b28`, `notify-and-purge-report.md`,
+   agent restarted 2026-11-12 17:55:12, PID 575653, MCP untouched). Messages are
+   written only when Signal is unconfigured or the send failed, after
+   `filter_outbound`, to a mode-600 file. A failing filter writes "withheld", never
+   the raw text.
+   - Log hygiene passed 43/0 on the server.
+   - **Proven live:** `pending_notifications.log` stayed absent through four delivered
+     fires, including 19:48 on 11-12, which sent real questions.
+   - **The old file is gone.** Two server sessions ran this brief. The first did the
+     pull, restart and removal, then wrote no report, so **whether it was `shred` or
+     `rm` is unrecorded**.
+   - No backup bundle covers `futile-pa/assistant/`, read from `backup.sh`.
+   - **The journal purge is NOT done.** The server CLI's permission classifier refused
+     the rotate+vacuum as "Logging/Audit Tampering". Separately, `dremon` has no write on
+     `/var/log/journal/<id>/` (`root:systemd-journal`, setgid, ACL r-x), so it needs
+     root either way.
+   - **Andre's commands:** `journalctl --user --rotate`, then
+     `sudo find /var/log/journal/ -name 'user-1000@*.journal' -print -delete`, and the
+     same for `'user-1000@*.journal~'`. The brief's pattern missed the four `~` archives.
+   - The purge removes every `dremon` user unit's journal history, including desktop
+     units. `external_watchdog.py` never reads the journal, so monitoring is unaffected.
+   - The system journal holds 0 full-reply lines. rsyslog is inactive and there's no
+     `/var/log/syslog`.
+   - **Found:** `server.log` beside `server.py`. 63,748 bytes, **mode 664**, mtime
+     2026-08-15, gitignored. Nothing in the repo writes it: `server.py` logs to stderr.
+     A pre-systemd leftover, probably MCP traffic from August. Unread.
 
 ## What changed in the week of 2026-11-06
 
