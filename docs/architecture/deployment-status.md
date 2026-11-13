@@ -205,7 +205,11 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
      pull, restart and removal, then wrote no report, so **whether it was `shred` or
      `rm` is unrecorded**.
    - No backup bundle covers `futile-pa/assistant/`, read from `backup.sh`.
-   - **The journal purge is NOT done.** The server CLI's permission classifier refused
+   - **Journal purged by Andre, 2026-11-13**, with the rotate and the two `sudo find`
+     deletes below. The full-reply count is now **0**. Caveat: the readable-journal
+     control is still owed. A zero from an unreadable journal looks the same, so the
+     next fire's `Check-in reply: N chars` count must read **1**.
+   - Why it fell to Andre: the server CLI's permission classifier refused
      the rotate+vacuum as "Logging/Audit Tampering". Separately, `dremon` has no write on
      `/var/log/journal/<id>/` (`root:systemd-journal`, setgid, ACL r-x), so it needs
      root either way.
