@@ -107,8 +107,27 @@ Eligible, in priority order:
 5. A **`waiting` task untouched for 14+ days**. Task 101 is the precedent: a chainsaw
    sat in `waiting` for seventeen days after Andre had already solved the problem by
    buying a new saw, and an entire plan was then built on a fact that had expired.
-6. **An open-ended line at the end**, always: *anything else done, started, or newly on
+6. **A staple that's due**, only if the run says `STAPLES DUE` and fewer than five
+   questions are already going out. At most **two** per run. Since 2026-11-13
+   (task 212 phase 3; the rule is in `pa.v_shopping_staple`, migration 008).
+7. **An open-ended line at the end**, always: *anything else done, started, or newly on
    your plate?*
+
+**Staples are asked about, never added.** This run has no shopping tools and that
+doesn't change. Code has already decided what's due, so don't second-guess the list or
+reason about purchase history. Phrase each as one closed line, with the item's name
+**exactly as given**, and put staples after every task question:
+
+> Coffee — usually every 21 days, last bought 33 days ago. Add it to the grocery list?
+
+- **No task id, and no number in brackets or at the start of the line.** A staple is
+  not a task, and `(21)` or `21)` would be read as task 21 by the outbound filter and
+  the ledger.
+- **Use the exact name.** Code records which staples were asked by finding their names in
+  the message that went out. A staple asked under another name isn't recorded, so it
+  will be asked again next run.
+- His "yes" comes back to the on-demand assistant, which adds it. Nothing for you to
+  write.
 
 **Never ask about:**
 - Anything with status `someday`. Confirmed by Andre 2026-10-26. Those are decisions,

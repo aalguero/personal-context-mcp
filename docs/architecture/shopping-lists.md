@@ -213,14 +213,60 @@ The payoff is not the list; it is not having to remember to open it.
 |---|---|---|---|
 | 1 | Migration, MCP tools, the Claude surface | Testable end to end with no Signal risk | **done, `80abf0b`** |
 | 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **done 2026-11-12**, `0facde4`, live-tested over Signal |
-| 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | open |
-| 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | open |
+| 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | **built 2026-11-13**, migration 008, deploy pending |
+| 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | **deferred 2026-11-13** (Andre), until voice stages 3–4 exist and the Pi stays on |
 
 **Voice is last on purpose.** Noticing you are out of coffee happens in the kitchen with
 your hands full, so `vocalassistant` is the natural capture point — but the Pi was found
 switched off on 11-08, its backup leg failed the same night, and it was off again during
 the 11-10 power cut. It should not be in the critical path of a feature Andre is trying to
 come to rely on.
+
+## Phase 3 — town trips and staples, settled with Andre 2026-11-13
+
+**Town trip: the lists ride alongside the tasks, never inside them.**
+`repo.suggest(situation='town_trip')` returns its suggestions exactly as before, plus a
+`shopping` key holding every active item, grouped by store category in walk order
+(`shop.trip_lists`). The doc's earlier idea of ranking errand tasks higher when a list
+is non-empty was **rejected**: it would let items move the backlog, which decision 1
+exists to prevent. `test_shopping.py`'s fingerprint now compares the tasks with the
+attachment removed. The attachment is asserted separately, with a control proving the
+fingerprint would otherwise see it.
+
+The check-in holds `pa_suggest_now`, so it can now **read** the lists, but only through
+a town_trip suggestion. That's read-only, and it's the deliberate read access phase 2
+deferred to phase 3. It still has no shop tools.
+
+**Staples: the rule is in the database, the phrasing is the model's, the memory is
+code's.**
+
+| Piece | Where |
+|---|---|
+| The rule | `pa.v_shopping_staple` (migration 008). It needs **3+ distinct purchase days** and **days since last ≥ 1.5 × median gap**, and the item must not be on a list. It must not have been asked about, or removed after its last purchase, within one median gap |
+| What was asked | `pa.shopping_staple_prompt`, one row per ask. A table, not the context store, by Andre's choice (context.json has three writers, task 223). It took **008**, so task 218 moves to **009** |
+| Offering | `checkin.run_once` appends a `STAPLES DUE` block, computed by code, to the run prompt. The check-in brief allows at most two, after all task questions, inside the five-question cap |
+| Recording | Only after Signal accepted the message. Only the staples whose **exact name** appears in the filtered text that went out get recorded, so a staple offered but not asked stays due. The log line carries counts, never names (rule 8) |
+| "Yes" | Comes back over Signal to the quick-ask path, which holds `pa_shop_add`. The check-in still has no shop tools |
+
+Why a removal counts as an answer: "changed my mind" and "shop was out" are decisions
+made about that item, more recent than the last purchase. Asking again next day
+would ignore them.
+
+**Dormant at first, by necessity.** On 11-13 production had 3 items and none bought.
+Nothing will be due for weeks. `tests/test_staples.py` (34 checks) proves the rule with
+paired fixtures, one due and one not due for each clause, and eight code-level breaks
+each turned it red.
+
+## Phase 4 — voice, deferred 2026-11-13
+
+Andre's call. Voice stage 4, the bridge from Home Assistant into futileMCP, isn't built,
+and both candidate paths put a powerful credential on one side:
+- HA's to-do lists plus a sync job on the server: the server holds an HA token that can
+  control the house.
+- An HA LLM agent calling futileMCP: HA holds `PA_AUTH_TOKEN`, behind a microphone
+  anyone in the room can talk to.
+
+Pick once voice stages 3–4 exist and the Pi has stayed on.
 
 ## Phase 2 — Signal, settled with Andre 2026-11-12
 

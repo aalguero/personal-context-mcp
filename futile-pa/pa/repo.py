@@ -437,8 +437,17 @@ def suggest(
                  from pa.situation s where s.name = %s""",
             (situation,),
         )
-    return {"situation": sit, "asked": {"minutes": minutes, "energy": energy, "contexts": ctx},
-            "suggestions": rows}
+    out = {"situation": sit, "asked": {"minutes": minutes, "energy": energy, "contexts": ctx},
+           "suggestions": rows}
+    # Task 212 phase 3 (Andre, 2026-11-13): a trip into town carries the
+    # shopping lists ALONGSIDE the suggestions, never inside the ranking. The
+    # rows above are computed before this and are byte-identical with or
+    # without items; test_shopping.py's backlog fingerprint asserts exactly
+    # that. Lazy import: pa.shop imports this module.
+    if situation == "town_trip":
+        from . import shop
+        out["shopping"] = shop.trip_lists(db=db)
+    return out
 
 
 def situations(db: Db | None = None) -> list[dict]:

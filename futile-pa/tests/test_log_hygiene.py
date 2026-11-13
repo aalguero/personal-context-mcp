@@ -182,7 +182,8 @@ def run_checkin(reply: str) -> tuple[str, Capture, list[str]]:
         raise KeyError(name)
 
     saved = {k: getattr(checkin, k) for k in
-             ("agent_loop", "toolset", "notify", "ledger", "get_db", "filter_outbound", "heartbeat_line")}
+             ("agent_loop", "toolset", "notify", "ledger", "get_db", "filter_outbound", "heartbeat_line",
+              "_staples_due")}
     checkin.agent_loop = types.SimpleNamespace(run=lambda *a, **k: reply)
     checkin.toolset = types.SimpleNamespace(dispatch=fake_dispatch, ALL_TOOLS=[])
     checkin.notify = types.SimpleNamespace(send=lambda m, **k: sent.append(m) or True)
@@ -191,6 +192,7 @@ def run_checkin(reply: str) -> tuple[str, Capture, list[str]]:
     checkin.get_db = lambda: None
     checkin.filter_outbound = lambda t: t
     checkin.heartbeat_line = lambda: "heartbeat"
+    checkin._staples_due = lambda: []
     try:
         with capturing() as cap:
             out = checkin.run_once()

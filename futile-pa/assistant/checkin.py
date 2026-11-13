@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from pa import shop
 from pa.db import get_db
 
 from . import agent_loop, ledger, notify, toolset
@@ -53,6 +54,15 @@ UNDELIVERED_NOTE = (
     "recorded as asked. Ask again in this run if those questions are still relevant."
 )
 
+# Task 212 phase 3. The rule (pa.v_shopping_staple, migration 008) is code;
+# the model only phrases the question. It gets no shopping tool for this: a
+# "yes" comes back over Signal to the quick-ask path, which holds pa_shop_add.
+STAPLES_NOTE = (
+    "\n\nSTAPLES DUE, computed by code from purchase history. Follow the brief's "
+    "staples rule in section 4. When you ask about one, use its name exactly as "
+    "written here:\n{lines}"
+)
+
 TZ = ZoneInfo("America/New_York")
 BACKUP_STATUS = Path.home() / ".personal-context" / "backup-status.json"
 
@@ -80,6 +90,9 @@ def run_once() -> str:
     )
     undelivered = toolset.dispatch("get_context", {"category": WATCHDOG_CATEGORY}).get("undelivered_since")
     prompt = RUN_PROMPT + (UNDELIVERED_NOTE.format(since=undelivered) if undelivered else "")
+    staples = _staples_due()
+    if staples:
+        prompt += STAPLES_NOTE.format(lines=shop.render_staples(staples))
     # Before the model reads its state, so open_questions does not carry
     # questions that have since been dealt with. Not fatal: a stale
     # open_questions is the pre-213 condition, not a reason to skip a check-in.
@@ -128,6 +141,15 @@ def run_once() -> str:
                 ledger.record_questions(filter_outbound(reply), get_db())
             except Exception as e:
                 log.error("Could not record asked questions (%s)", type(e).__name__)
+            # Only the staples the delivered text names start their cooldown;
+            # one offered but not asked stays due. A count, never the names
+            # (hard rule 8: items are content).
+            if staples:
+                try:
+                    named = shop.record_staples_asked(filter_outbound(reply), staples, get_db())
+                    log.info("Recorded %d of %d due staple(s) as asked", len(named), len(staples))
+                except Exception as e:
+                    log.error("Could not record staple questions (%s)", type(e).__name__)
     else:
         delivered = notify.send(heartbeat_line(), record=False)
         outcome = ("nothing to ask, heartbeat sent" if delivered
@@ -152,6 +174,16 @@ def run_once() -> str:
         "value": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     return reply
+
+
+def _staples_due() -> list[dict]:
+    """Due staples, or none if the query fails: a staple question is never
+    worth losing a check-in over."""
+    try:
+        return shop.staples_due(get_db())
+    except Exception as e:
+        log.error("Could not read due staples (%s)", type(e).__name__)
+        return []
 
 
 def heartbeat_line(now: datetime | None = None) -> str:

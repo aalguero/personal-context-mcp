@@ -372,6 +372,67 @@ def shop_list(category: str | None = None, list: Any = None,
     return out
 
 
+# ---------------------------------------------------------------------------
+# Staples (phase 3): asked about, never auto-added
+# ---------------------------------------------------------------------------
+#
+# The rule lives in one place, the view pa.v_shopping_staple (migration 008),
+# so this module only reads `due` and records what was asked. Staples carry
+# no task id, so a check-in question about one is resolved by the item's
+# name — which is why record_staples_asked() matches names in the text that
+# actually went out, not the list that was offered to the model: the model
+# may ask about fewer than it was given, and an unasked staple must not start
+# its cooldown.
+
+def staples_due(db: Db | None = None) -> list[dict]:
+    """Staples the check-in may ask about now, most overdue first."""
+    db = db or get_db()
+    return db.rows(
+        """select category, normalized_name, name, subcategory, store, buy_count,
+                  median_gap_days, days_since
+             from pa.v_shopping_staple
+            where due
+            order by days_since / nullif(median_gap_days, 0) desc, name""")
+
+
+def render_staples(rows: list[dict]) -> str:
+    """Lines for the check-in prompt: data for the model, never sent as is.
+    No parenthesised numbers, in case the model copies a line verbatim."""
+    out = []
+    for r in rows:
+        where = " / ".join(x for x in (r["category"], r.get("subcategory")) if x)
+        out.append(f"- {_neutral(r['name'])} — {where}; bought on {r['buy_count']} days, "
+                   f"usually every {r['median_gap_days']:g} days, last {r['days_since']} days ago")
+    return "\n".join(out)
+
+
+def _mentions(text: str, name: str) -> bool:
+    words = re.escape(name.strip().lower()).replace(r"\ ", r"\s+")
+    return re.search(rf"(?<!\w){words}(?!\w)", text.lower()) is not None
+
+
+def record_staples_asked(sent_text: str, offered: list[dict], db: Db | None = None) -> list[str]:
+    """Start the cooldown for each offered staple the sent message names.
+
+    Called by checkin.py only after Signal accepted the message, with the
+    filtered text Andre received. Returns the names recorded."""
+    db = db or get_db()
+    asked = [r for r in offered if _mentions(sent_text, r["name"])]
+    for r in asked:
+        db.execute("insert into pa.shopping_staple_prompt (category, normalized_name) values (%s, %s)",
+                   (r["category"], r["normalized_name"]))
+    return [r["name"] for r in asked]
+
+
+def trip_lists(db: Db | None = None) -> dict:
+    """Everything active, grouped by store category in walk order — what a
+    town_trip suggestion carries alongside its tasks. Read-only."""
+    out = shop_list(db=db)
+    out["title"] = "Shopping for this trip"
+    out["rendered"] = render(out["title"], out["items"], show_list=True, show_category=True)
+    return out
+
+
 def _walk_key(it: dict) -> tuple:
     cat = it.get("category") or ""
     sub = it.get("subcategory")

@@ -68,6 +68,16 @@ atexit.register(db.close)
 FOR_DATE = "2026-11-10"
 
 
+def _tasks_only(result: dict) -> dict:
+    """A suggest() result without its town_trip `shopping` attachment.
+
+    Phase 3 (2026-11-13) attaches the lists to town_trip suggestions on
+    purpose. The invariant this fingerprint guards is narrower and unchanged:
+    items never move the TASKS the suggester returns. The attachment itself is
+    asserted separately, below, so excluding it here hides nothing."""
+    return {k: v for k, v in result.items() if k != "shopping"}
+
+
 def backlog() -> dict:
     return {
         "task": db.value("select count(*) from pa.task"),
@@ -76,7 +86,8 @@ def backlog() -> dict:
         "today": [r["id"] for r in db.rows("select id from pa.v_today order by id")],
         "event": db.value("select count(*) from pa.event"),
         "brief": json.dumps(repo.daily_brief(for_date=FOR_DATE, record=False), sort_keys=True, default=str),
-        "suggest": json.dumps([repo.suggest(limit=25), repo.suggest(situation="town_trip", limit=25)],
+        "suggest": json.dumps([_tasks_only(repo.suggest(limit=25)),
+                               _tasks_only(repo.suggest(situation="town_trip", limit=25))],
                               sort_keys=True, default=str),
     }
 
@@ -366,6 +377,21 @@ r = call("pa_shop_remove", {"items": [999999]})
 check("remove bad id: not found, nothing marked", r["marked"] == [] and r["not_found"])
 check("an implicit list has no default category, so one is still required",
       call("pa_shop_add", {"name": "fishing line", "list": "camping trip"}).get("error") is not None)
+
+# ---------------------------------------------------------------------------
+section("Phase 3: a town trip carries the lists, alongside and never inside")
+tt = repo.suggest(situation="town_trip", limit=25)
+active = db.value("select count(*) from pa.shopping_item where bought_at is null and removed_at is null")
+check("town_trip carries a shopping section", "shopping" in tt, ", ".join(sorted(tt)))
+check("it holds every active item, from every list and category",
+      tt.get("shopping", {}).get("count") == active and active > 0,
+      f"{tt.get('shopping', {}).get('count')} vs {active}")
+check("its rendering has no task-id shape",
+      not _TASK_ID_PATTERN.search(tt.get("shopping", {}).get("rendered", "")))
+check("other situations carry no shopping section",
+      "shopping" not in repo.suggest(situation="desk_block", limit=5) and "shopping" not in repo.suggest(limit=5))
+check("positive control: the fingerprint WOULD see the attachment if it were not excluded",
+      json.dumps(tt, sort_keys=True, default=str) != json.dumps(_tasks_only(tt), sort_keys=True, default=str))
 
 # ---------------------------------------------------------------------------
 section("And after all of that, the backlog still has not moved")

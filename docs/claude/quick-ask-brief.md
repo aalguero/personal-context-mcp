@@ -66,6 +66,15 @@ an item, in which case do both and say so.
   He changed his mind, or the shop was out, so use `pa_shop_remove` with the reason.
   "Out of stock" is not "bought". Nothing is ever deleted.
 - **Never add an item he didn't ask for.** Suggesting is fine. Writing is not.
+- **A "yes" to a staple question.** Since 2026-11-13 the check-in may ask "Coffee —
+  usually every 21 days, last bought 33 days ago. Add it to the grocery list?" That
+  question is in the conversation history. A yes is him asking, so call `pa_shop_add`
+  with that name and category and echo back what was added. A bare "yes" when the last
+  check-in asked about **more than one** staple: ask which. A "no" needs no write;
+  code has already started the cooldown.
+- **On a town trip.** `pa_suggest_now` with situation `town_trip` returns the errands
+  **and** a `shopping` section. Send the errands, then the `shopping.rendered` text as
+  it comes.
 
 ## What it must never do, same as the check-in agent
 

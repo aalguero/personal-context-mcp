@@ -74,9 +74,10 @@ futile-pa/
   migrations/                 001_core, 002_reference_data, 003_situation_fit,
                               004_shopping, 005_overdue_and_defer,
                               006_deterministic_order,
-                              007_hard_deadline_guard
+                              007_hard_deadline_guard, 008_shopping_staples
   tests/test_smoke.py         93 checks; refuses any DB but pa_verify / pa_scratch*
-  tests/test_shopping.py      95 checks, same guard
+  tests/test_shopping.py      100 checks, same guard
+  tests/test_staples.py       34 checks, same guard; the staple rule clause by clause (212)
   tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
   tests/test_toolset.py       30 checks; which agent path holds the shop tools (212)
   tests/test_log_hygiene.py   43 checks, no DB; no model text, reply text or traceback reaches the journal, and notify keeps only undelivered messages, filtered, mode 600

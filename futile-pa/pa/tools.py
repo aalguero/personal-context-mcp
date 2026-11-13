@@ -78,6 +78,9 @@ TOOLS: list[dict] = [
        minutes and energy and any contexts directly. A task is only suggested if
        the circumstances supply every context it requires, it fits the time, and
        it does not need more energy than is available.
+       For situation town_trip the result also carries `shopping`: every active
+       shopping item, grouped by store in walk order. Show its `rendered` text
+       as is, after the errands. Items never affect which tasks are suggested.
        """, {
         "situation": {"type": "string",
                       "description": "A named situation, e.g. ev_charging, dog_walk, desk_block, "
