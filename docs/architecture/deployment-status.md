@@ -218,7 +218,8 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
      `/var/log/syslog`.
    - **Found:** `server.log` beside `server.py`. 63,748 bytes, **mode 664**, mtime
      2026-08-15, gitignored. Nothing in the repo writes it: `server.py` logs to stderr.
-     A pre-systemd leftover, probably MCP traffic from August. Unread.
+     A pre-systemd leftover, probably MCP traffic from August. **Andre reviewed it
+     2026-11-13, found nothing sensitive, and removed it with `rm`.**
 
 ## What changed in the week of 2026-11-06
 
