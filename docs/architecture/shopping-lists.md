@@ -15,7 +15,7 @@ later session needs in order not to relitigate it.
 tables, five `pa_shop_*` tools, and the Claude surface. **Phase 2 deployed 2026-11-12
 17:14** (`0facde4`, Signal, see below, `shop-phase2-report.md`). It needs no migration.
 Andre's live Signal test passed the same day, adding and removing a probe item with no
-task created. Phase 3 deployed 2026-11-13 (`95739e5` + `391ebab`). Phase 4 (voice) is deferred.
+task created. Phase 3 deployed 2026-11-13 (`95739e5` + `391ebab`). Phase 4's server side is built (`639cf6c`); the HA side is Andre's.
 
 ---
 
@@ -214,7 +214,7 @@ The payoff is not the list; it is not having to remember to open it.
 | 1 | Migration, MCP tools, the Claude surface | Testable end to end with no Signal risk | **done, `80abf0b`** |
 | 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **done 2026-11-12**, `0facde4`, live-tested over Signal |
 | 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | **deployed 2026-11-13 20:49**, migration 008, dormant until staples have history |
-| 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | **deferred 2026-11-13** (Andre), until voice stages 3–4 exist and the Pi stays on |
+| 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | **server side built 2026-11-13** (`639cf6c`, shop-only token); HA setup is Andre's, see `voice-shopping-setup.md` |
 
 **Voice is last on purpose.** Noticing you are out of coffee happens in the kitchen with
 your hands full, so `vocalassistant` is the natural capture point — but the Pi was found
@@ -257,16 +257,38 @@ Nothing will be due for weeks. `tests/test_staples.py` (34 checks) proves the ru
 paired fixtures, one due and one not due for each clause, and eight code-level breaks
 each turned it red.
 
-## Phase 4 — voice, deferred 2026-11-13
+## Phase 4 — voice, through a shop-only token (2026-11-13)
 
-Andre's call. Voice stage 4, the bridge from Home Assistant into futileMCP, isn't built,
-and both candidate paths put a powerful credential on one side:
-- HA's to-do lists plus a sync job on the server: the server holds an HA token that can
-  control the house.
-- An HA LLM agent calling futileMCP: HA holds `PA_AUTH_TOKEN`, behind a microphone
-  anyone in the room can talk to.
+Deferred that morning, then taken up the same evening. Andre's decision: **a second
+futileMCP token, `PA_SHOP_TOKEN`, that reaches only `pa_shop_add` and `pa_shop_list`.**
+HA's MCP client integration connects an LLM conversation agent to futileMCP with it.
 
-Pick once voice stages 3–4 exist and the Pi has stayed on.
+Why this and not the earlier options:
+- HA holding `PA_AUTH_TOKEN` puts every tool, medical and financial tasks included,
+  behind an open microphone and inside HA's backups.
+- An HA to-do sync job puts an HA long-lived token on the server, and HA has no scoped
+  tokens: it's admin over the house.
+- futileMCP's tokens **can** be scoped, so the credential HA holds is the smallest
+  possible one.
+
+**Server side (`639cf6c`).** The shop token routes to a **separate MCP server instance
+with its own session manager**, so scoping is structural: a session id from one route
+means nothing to the other, and the scoped instance lists and dispatches only those two
+names. Unset means no route. Weak, or equal to the full token, means the server refuses
+to start. `PA_SHOP_ALLOW_PATH=1` allows `/t/<token>/mcp` for the shop token only, in
+case HA can't send a header. An access-log filter redacts `/t/…` paths, which also fixed
+a latent leak in the old `PA_AUTH_ALLOW_PATH` fallback. Proven against a live
+`server.py --http` by `tests/test_server_scopes.py` (30 checks; five code breaks each
+turn it red).
+
+**The voice path can't remove or mark items.** Corrections go through Signal or
+claude.ai. That's the price of the smallest token, and the easiest thing to widen later
+if it chafes.
+
+**HA side:** `voice-shopping-setup.md`, by hand. It starts with three unknowns to
+establish: whether HA's MCP client speaks streamable HTTP (it first shipped SSE-only, and
+this server is streamable HTTP only), whether it can send a header, and whether the
+chosen LLM integration can use an MCP server as its API.
 
 ## Phase 2 — Signal, settled with Andre 2026-11-12
 

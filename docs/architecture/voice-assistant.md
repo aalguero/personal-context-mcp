@@ -96,6 +96,10 @@ Precise**. The external HTTPS URL works at home too, so this is a convenience on
    - 2b: train and install the custom wake word, repeat the wake checks for it.
 3. TTS (spoken replies), and Whisper vocabulary hints from HA entity names.
 4. Fallback agent into futileMCP: HA conversation agent calling `pa_*` tools.
+   **Started 2026-11-13 for shopping only** (task 212 phase 4): HA's MCP client with
+   `PA_SHOP_TOKEN`, which reaches `pa_shop_add`/`pa_shop_list` and nothing else. Setup
+   is in `architecture/voice-shopping-setup.md`. Any wider voice access to futileMCP is
+   a separate decision about a separate token.
 
 ### Stage 1 check status (see `docs/STAGE1.md` in `vocal-assistant.tar.gz`)
 

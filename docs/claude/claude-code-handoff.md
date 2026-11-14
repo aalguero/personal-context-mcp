@@ -41,7 +41,7 @@ connector. That asymmetry is why briefs exist (§3).
 
 ```
 server.py                     MCP server, ASGI auth middleware, tool registration
-.env                          mode 600. PGPASSWORD, PA_AUTH_TOKEN, age recipient,
+.env                          mode 600. PGPASSWORD, PA_AUTH_TOKEN, PA_SHOP_TOKEN, age recipient,
                               B2 creds, SIGNAL_*, DEADMAN_PING_URL, BACKUP_PING_URL
 futile-pa/
   pa/                         the data layer, shared by the server and the agent
@@ -78,6 +78,7 @@ futile-pa/
   tests/test_smoke.py         93 checks; refuses any DB but pa_verify / pa_scratch*
   tests/test_shopping.py      100 checks, same guard
   tests/test_staples.py       34 checks, same guard; the staple rule clause by clause (212)
+  tests/test_server_scopes.py 30 checks; server.py --http live: what each token reaches (212)
   tests/test_ledger.py        42 checks, no DB; refuses unless the store is redirected
   tests/test_toolset.py       30 checks; which agent path holds the shop tools (212)
   tests/test_log_hygiene.py   43 checks, no DB; no model text, reply text or traceback reaches the journal, and notify keeps only undelivered messages, filtered, mode 600
@@ -185,7 +186,7 @@ made by the agent from Andre's Signal replies, and 1 by Claude — a stale
 
 ## 6. Hard rules that apply to every brief
 
-1. **Never print, log or echo** `PA_AUTH_TOKEN`, `PGPASSWORD`, any B2 key,
+1. **Never print, log or echo** `PA_AUTH_TOKEN`, `PA_SHOP_TOKEN`, `PGPASSWORD`, any B2 key,
    `ANTHROPIC_API_KEY`, either ping URL, `.env` contents, **either phone number**, or
    the Signal PIN — not even partially masked. Never put a DSN or a URL on a command
    line; argv is visible in a process listing. Read `.env` in-process.
