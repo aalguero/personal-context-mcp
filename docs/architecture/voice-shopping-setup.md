@@ -38,6 +38,10 @@ token gets its own MCP server instance, proven in
   authenticates the request.
 - **0.3:** still to check once an LLM conversation integration is added.
 
+**Done 2026-11-14:** step 1, and step 3b with `PA_SHOP_ALLOW_PATH=1`. HA's MCP client
+connected over the path form. The access-log redaction was proven live: 0 journal lines
+with the token, 9 `/t/<redacted>` lines. Next: step 2, then step 4, then step 5.
+
 These were not checkable from shadow. Each answer changes the next step.
 
 | # | Question | How to check | If no |

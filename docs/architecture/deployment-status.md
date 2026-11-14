@@ -265,7 +265,16 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
       token-shaped `/t/` lines, so the old fallback had never leaked.
     - **Found after the deploy, from HA's docs and Andre's dialog:** HA's MCP client
       tries streamable HTTP first, which works, but has **no header field**. So the HA
-      side needs the path form: `PA_SHOP_ALLOW_PATH=1`, not yet set.
+      side needs the path form: `PA_SHOP_ALLOW_PATH=1`.
+    - **Path form enabled by Andre, 2026-11-14, and HA's MCP client connected** with
+      `/t/<PA_SHOP_TOKEN>/mcp`. **Redaction proven in production:** after HA connected,
+      the MCP journal held **0** lines containing the shop token (pattern fed from a
+      file descriptor, never argv) and **9** `/t/<redacted>` access lines. So HA's
+      requests were logged, with the token blanked. Before this, the filter had nothing
+      to act on in production.
+    - **Still Andre's, in `voice-shopping-setup.md`:** the LLM conversation agent (step 2,
+      and unknown 0.3), the voice pipeline (step 4), and the typed, spoken and cleanup
+      tests with `zqvoice beans` (step 5).
     - **Brief nit, from the report:** `migrate.py | tail -1; echo $?` reports
       `tail`'s exit code, and `up to date` is printed even after applying everything.
       Future briefs should use `${PIPESTATUS[0]}` and check `pa.schema_migration`.
