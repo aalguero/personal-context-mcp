@@ -525,8 +525,11 @@ snapshot below is 2026-11-12; `claude/claude-code-handoff.md` §10 has the full 
 - **207** — an alarm about Signal that does not travel over Signal.
 - **206, 223** — the Signal history grows without bound; `context.json` has four writer
   processes and a per-process lock.
-- **218** — the unbuilt "Migration 004" spec must be renumbered to **007**: 006 was
-  taken by `006_deterministic_order` on 11-11. The task's title still says 005.
+- **218** — the unbuilt task-gates spec, once "Migration 004", is now provisionally
+  **009**: 005–008 were all taken by other work. Done 11-13 in `backlog.md` (line 9 and
+  §H), `backup-status.md` and `encryption-at-rest.md`; the task's title and notes
+  say 009. What's left of 218 is the cosmetic `task-agent-brief.md` path line in its
+  notes.
 - **222, 226** — recurrence preview lies; two places still compute overdue by hand.
 - **162, 169** — data cleanup and retagging for season and low energy.
 

@@ -316,7 +316,8 @@ started; see `encryption-at-rest.md`.
   `rclone.conf` on disk.
 - **`source="backup.sh"` does not work.** `pa.task.source` allows only `manual, claude,
   google_tasks, gmail, calendar, recurrence, import`. `"manual"` substituted; a proper
-  value for "an unattended script noticed something" goes into migration 004.
+  value for "an unattended script noticed something" goes into the task-gates
+  migration (backlog §H, once called 004, provisionally 009: task 218).
 - **The `error` field stays `null` on a `degraded` result, by design** — it is reserved
   for "nothing trustworthy exists". `destinations` carries which leg failed.
 - **psycopg_pool shutdown noise is gone.** `atexit.register(db.close)` removed ~20 s of

@@ -6,8 +6,11 @@ connected, cleaned up, loaded with real data and fully triaged. See
 `architecture/deployment-status.md` for state and
 `architecture/phase-1-task-backend.md` for design.
 
-**Next action for a session picking this up cold: section H, migration 004.** The
-triage is finished and the gate design now has its full evidence base.
+**Next action for a session picking this up cold: section H, the task-gates migration,
+provisionally 009.** The triage is finished and the gate design now has its full evidence
+base. **The number is not reserved.** 004–008 were taken by other work while this spec
+was still called "004" (task 218). Read `pa.schema_migration`, which is keyed by
+filename, and take the next unused number when you build it.
 
 ---
 
@@ -306,9 +309,15 @@ depending on an answer that existed only in Andre's head.
 
 ---
 
-## H. NEXT — migration 004, task gates
+## H. NEXT — task gates, provisionally migration 009
 
 Decided 2026-10-05, sequenced after triage, and triage is now done.
+
+**Numbering (2026-11-13, task 218):** this spec was called "migration 004" until that
+number was taken. So were 005–008: 004 shopping, 005 overdue-and-defer, 006
+deterministic order, 007 hard-deadline guard, 008 shopping staples. **009 is where it
+lands if nothing else does first.** Confirm against `pa.schema_migration` before
+writing the file. Never edit an applied migration.
 
 ```sql
 create table pa.task_gate (

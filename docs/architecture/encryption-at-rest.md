@@ -310,7 +310,8 @@ Everything written to `/home/dremon/backups/`, to the Pi or to B2 is already enc
   silences the alarm system. Task 105 did this for nine days; task 118 is doing it
   now. Fix is in the task-116 / B2 brief.
 - **Wiring the status file into `pa_daily_brief`** is a futile-pa code change and
-  belongs with the migration 004 brief.
+  belongs with the task-gates migration brief (backlog §H, once called 004,
+  provisionally 009: task 218).
 - **The server's disk is not encrypted** (item 2). Backups protect the history; they
   do not protect the live data on the machine.
 
