@@ -129,11 +129,20 @@ conversation**.
    - Pass: the reply says it was added.
    - Then, from claude.ai or Signal: *"show me my grocery list"*. `zqvoice beans` is on it.
    - `pa.task` must not grow. A Claude session can check that read-only.
-3. **Spoken.** *"Okay computer, add zqvoice beans to the grocery list."* Expect a reply
-   that it's already there, because shopping lists deduplicate. Then *"what's on my
-   grocery list?"*
-4. **Clean up from Signal or claude.ai:** *"take zqvoice beans off, it was a test."* The
-   voice path deliberately can't remove items.
+3. **Spoken, with real words.** *"Okay computer, add purple test beans to the grocery
+   list,"* then say **exactly the same thing again**. The second time should report it's
+   already there. Both go through the same transcription, so that's a fair dedupe
+   test. Then *"what's on my grocery list?"*
+
+   **Don't speak the typed marker.** On 2026-11-14 *"zqvoice beans"* spoken became
+   **`ZQ voice beams`**: Whisper split the made-up word and misheard "beans". That's a
+   different name, so dedupe rightly added a second item. A nonsense token is a good
+   unique marker typed and noise spoken. The "beans" → "beams" mishearing is real and
+   will happen with real items. The agent's echo-back and the visible read-back contain
+   it. The lasting fix is voice stage 3's Whisper vocabulary hints, or a larger model.
+4. **Clean up from Signal or claude.ai:** remove every probe (`zqvoice beans`, `ZQ voice
+   beams`, `purple test beans`), reason "voice test". The voice path deliberately can't
+   remove items.
 5. **Home commands still local:** *"Okay computer, turn off the kitchen lights."* It
    should work exactly as before, with no LLM involved (check the pipeline's debug view).
 
