@@ -39,9 +39,19 @@ implementation, `pa.profile.ContextService`, used by `server.py` (scope `CHAT`) 
 ## Decisions, with what was rejected
 
 1. **Its own schema, walled off from `pa_sql`.** `pa_sql` now runs `set local role
-   pa_reader` inside its read-only transaction. `pa_reader` was created by migration 001,
-   never used, and already has the app role as a member, so no superuser step. It has
-   SELECT on `pa` and nothing on `profile`. *Rejected:* tables inside `pa` (the agent's
+   pa_reader` inside its read-only transaction. `pa_reader` was created by migration 001
+   and never used. It has SELECT on `pa` and nothing on `profile`.
+   **Correction, 2026-11-14** (`context-store-report.md`): the first deploy stopped
+   because on futileassistant the app role's membership is ADMIN only (`set_option=f`),
+   and Postgres 16+ refuses `SET ROLE` without SET. My check, `pg_has_role … 'MEMBER'`,
+   is true for an ADMIN-only membership. And the wall probe accepted any "permission
+   denied", so it reported success while every `pa_sql` read was failing. Andre's
+   decision: 009 grants the app role `pa_reader WITH SET TRUE, INHERIT FALSE` itself.
+   The ADMIN option allows that without a superuser, which I proved on Postgres 18.6
+   against the same membership. 009 then refuses unless SET holds. The tests now require
+   an ordinary `pa_sql` read to succeed *before* a refusal counts, and require the
+   refusal to be `permission denied for schema profile`, nothing vaguer.
+   `test_server_scopes` now calls `pa_sql` through the real server. *Rejected:* tables inside `pa` (the agent's
    `pa_sql` could then query medical and financial facts directly); a second database
    (a cross-database query is impossible, but backups and restores double). `pa.context`
    was already taken by the situational contexts, which is one more reason for a new name.

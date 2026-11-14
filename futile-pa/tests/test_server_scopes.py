@@ -269,8 +269,10 @@ try:
         ("context_category", {"category": "zqscope_med"}),
         ("set_context", {"category": "task_agent", "key": "open_questions", "value": {}}),
         ("context_history", {"category": "zqscope_med"}),
+        ("pa_sql", {"query": "select count(*) as n from pa.task"}),
+        ("pa_sql", {"query": "select count(*) as n from profile.entry"}),
     ]))
-    every, by_name, cat, refused, hist = ctx["calls"]
+    every, by_name, cat, refused, hist, sql_pa, sql_profile = ctx["calls"]
     check("unscoped get_context includes the normal category", "zqscope hobby" in every, every[:200])
     check("unscoped get_context leaves the sensitive content out", "zqscope secret" not in every)
     check("...and names it in the sensitive index", "zqscope_med" in every and "not included" in every)
@@ -278,6 +280,12 @@ try:
     check("context_category shows the tier", '"tier": "sensitive"' in cat, cat[:200])
     check("set_context on a code-owned key is refused", "task 213" in refused, refused[:200])
     check("context_history answers", "History" in hist, hist[:200])
+    # pa_sql through the real server: the read path must work before the wall
+    # means anything (the first deploy found every pa_sql read failing on SET ROLE).
+    check("pa_sql through the server reads pa.task", '"row_count"' in sql_pa
+          and "permission denied" not in sql_pa, sql_pa[:200])
+    check("pa_sql through the server is refused on schema profile",
+          "permission denied for schema profile" in sql_profile, sql_profile[:200])
 finally:
     log = srv.stop()
 check("no context value reached the server's log", "zqscope secret" not in log and "zqscope hobby" not in log)

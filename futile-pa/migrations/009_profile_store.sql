@@ -26,10 +26,21 @@
 --  Number 009 by Andre's choice; task 218's unbuilt task-gates spec moves to 010.
 --
 --  pa_sql's role is pa_reader, which migration 001 created (nologin, SELECT on
---  schema pa, default privileges for new pa tables) and nothing has used until
---  now. The app role is already a member of it on futileassistant (checked
---  2026-11-13), so no superuser step is needed. This migration refuses to run
---  if that membership is missing, rather than leave pa_sql unable to switch.
+--  schema pa, default privileges for new pa tables) and nothing used until now.
+--
+--  SET ROLE needs the membership's SET option (Postgres 16+). On futileassistant
+--  the app role's membership is ADMIN only (admin t, inherit f, set f, granted by
+--  postgres), so `set role pa_reader` was refused and the first deploy attempt of
+--  this migration stopped (context-store-report.md, 2026-11-14). pg_has_role
+--  'MEMBER' is true for an ADMIN-only membership, which is why the first version
+--  of the check below passed on a role that could not switch.
+--
+--  Andre's decision, 2026-11-14: this migration grants it. The ADMIN option lets
+--  the app role grant pa_reader to itself WITH SET TRUE, no superuser needed
+--  (proven on Postgres 18.6 on shadow against that exact membership). It is one
+--  cluster-wide change, and it only lets the app role step DOWN to the read-only
+--  role. INHERIT stays false, so nothing about the app role's own privileges
+--  changes. The migration then refuses unless SET really holds.
 -- ============================================================================
 
 do $$
@@ -37,8 +48,15 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'pa_reader') then
     raise exception 'role pa_reader does not exist (migration 001 creates it): pa_sql would have no role to switch to';
   end if;
-  if not pg_has_role(current_user, 'pa_reader', 'MEMBER') then
-    raise exception 'role % is not a member of pa_reader, so pa_sql could not switch to it: as a superuser, grant pa_reader to %', current_user, current_user;
+  if not pg_has_role(current_user, 'pa_reader', 'SET') then
+    begin
+      execute format('grant pa_reader to %I with set true, inherit false', current_user);
+    exception when insufficient_privilege then
+      raise exception 'role % cannot SET ROLE pa_reader and has no ADMIN option to grant it: as a superuser, grant pa_reader to % with set true, inherit false', current_user, current_user;
+    end;
+  end if;
+  if not pg_has_role(current_user, 'pa_reader', 'SET') then
+    raise exception 'role % still cannot SET ROLE pa_reader after the grant: pa_sql would fail on every read', current_user;
   end if;
 end $$;
 

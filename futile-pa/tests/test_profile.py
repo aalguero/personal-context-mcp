@@ -124,13 +124,24 @@ def raw(sql: str, params=(), writer: str | None = None):
 # ===========================================================================
 section("pa_sql is walled off from schema profile")
 chat.set("zq_wall", "k", "zqsecret wall value")
+# First: can pa_sql read at all? On futileassistant the first deploy found the
+# app role could not SET ROLE pa_reader, so EVERY read failed, and a wall check
+# that accepted any "permission denied" reported success (context-store-report,
+# 2026-11-14). An ordinary read must succeed before a refusal means anything.
+check("the app role can SET ROLE pa_reader (migration 009 grants it)",
+      raw("select pg_has_role(current_user, 'pa_reader', 'SET') as ok")[0]["ok"] is True)
+e = raises(lambda: db.read_only("select count(*) as n from pa.task"))
+check("pa_sql reads pa.task (an ordinary read works at all)", e is None, str(e))
+e = raises(lambda: db.read_only("select count(*) as n from pa.agent_state"))
+check("pa_sql reads pa.agent_state", e is None, str(e))
+check("pa_sql's reads really run as pa_reader",
+      db.read_only("select current_user as u")[0]["u"] == "pa_reader")
 e = raises(lambda: db.read_only("select value from profile.entry"))
-check("pa_sql (Db.read_only) is refused on profile.entry", e is not None and "permission denied" in e, str(e))
+check("pa_sql is refused on profile.entry, by the schema's missing grant",
+      e is not None and "permission denied for schema profile" in e, str(e))
 e = raises(lambda: db.read_only("select * from profile.history"))
-check("pa_sql is refused on profile.history", e is not None and "permission denied" in e, str(e))
-check("pa_sql still reads pa (pa.task, pa.agent_state)",
-      isinstance(db.read_only("select count(*) as n from pa.task"), list)
-      and isinstance(db.read_only("select count(*) as n from pa.agent_state"), list))
+check("pa_sql is refused on profile.history, by the schema's missing grant",
+      e is not None and "permission denied for schema profile" in e, str(e))
 check("positive control: the same SELECT on a direct connection succeeds",
       raw("select count(*) as n from profile.entry")[0]["n"] >= 1)
 # The role switch is the control: run read_only's statements minus `set role`.
