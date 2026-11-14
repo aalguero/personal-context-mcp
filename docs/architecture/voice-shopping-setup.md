@@ -26,6 +26,18 @@ token gets its own MCP server instance, proven in
 
 ## Step 0: establish three unknowns before configuring anything
 
+**Answered 2026-11-13** from HA's integration docs
+(home-assistant.io/integrations/mcp) and Andre's add-MCP dialog:
+- **0.1: yes.** The integration *"first tries the Streamable HTTP transport"* and falls
+  back to SSE. Andre's dialog still says "URL for the SSE endpoint", but its example is
+  `http://example/mcp`, the streamable-HTTP style. That looks like leftover wording on a
+  version that tries streamable HTTP first (inferred; connecting settles it).
+- **0.2: no header.** The docs list only the URL and OAuth, with no custom headers. So
+  use **step 3b, the path form**, and set `PA_SHOP_ALLOW_PATH=1` on the server. OAuth
+  isn't involved: HA asks for it only when a server demands sign-in, and the path token
+  authenticates the request.
+- **0.3:** still to check once an LLM conversation integration is added.
+
 These were not checkable from shadow. Each answer changes the next step.
 
 | # | Question | How to check | If no |
