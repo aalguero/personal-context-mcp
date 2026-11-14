@@ -14,6 +14,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -91,6 +92,15 @@ log = logging.getLogger("personal-context-mcp")
 # Storage
 # ---------------------------------------------------------------------------
 DEFAULT_STORE = Path.home() / ".personal-context" / "context.json"
+
+# Task 212 phase 4 (Andre, 2026-11-13): voice capture through Home Assistant
+# gets its own token, PA_SHOP_TOKEN, which reaches ONLY these tools. HA sits
+# behind a microphone anyone in the room can talk to; PA_AUTH_TOKEN reaches
+# every tool, medical and financial tasks included. Least privilege is
+# enforced structurally: the shop token is routed to a separate MCP server
+# instance (its own session manager, so its session ids mean nothing to the
+# full one) whose tool list and dispatcher only know these names.
+SHOP_SCOPE_TOOLS = frozenset({"pa_shop_add", "pa_shop_list"})
 
 
 class ContextStore:
@@ -204,13 +214,19 @@ class ContextStore:
 # MCP Server definition
 # ---------------------------------------------------------------------------
 
-def build_server(store: ContextStore) -> Server:
+def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> Server:
+    """The MCP server. `allowed` None is the full surface; a set restricts both
+    the tool list and dispatch to those names (the shop-token server)."""
     app = Server("personal-context")
 
     # ---- Tool schemas ------------------------------------------------------
 
     @app.list_tools()
     async def list_tools() -> list[Tool]:
+        tools = _all_tools()
+        return tools if allowed is None else [t for t in tools if t.name in allowed]
+
+    def _all_tools() -> list[Tool]:
         return [
             Tool(
                 name="get_context",
@@ -277,6 +293,11 @@ def build_server(store: ContextStore) -> Server:
     @app.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         arguments = arguments or {}
+
+        # Same answer as a name that does not exist at all: a scoped client
+        # learns nothing about what the full server holds.
+        if allowed is not None and name not in allowed:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
         if name.startswith("pa_"):
             args = {k: v for k, v in arguments.items() if v is not None}
@@ -357,44 +378,67 @@ class AuthMiddleware:
     Unauthorised requests get a bare 404 — never 401 — so an anonymous
     scanner (or claude.ai's connector probing for OAuth) learns nothing
     about what this server is or that authentication exists at all.
+
+    Each route is (token, app, allow_path): the request goes to the app whose
+    token it presents, by Bearer header, or by a /t/<token>/ path prefix where
+    that route allows it. Every token is compared on every request, so which
+    route matched is not visible in timing.
     """
 
     PATH_PREFIX = "/t/"
 
-    def __init__(self, app, token: str, allow_path: bool):
-        self.app = app
-        self.token = token
-        self.allow_path = allow_path
+    def __init__(self, routes: list[tuple[str, Any, bool]]):
+        self.routes = routes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
-            await self.app(scope, receive, send)
+            await self.routes[0][1](scope, receive, send)
             return
-
-        authorized = False
 
         headers = dict(scope.get("headers") or [])
         auth_header = headers.get(b"authorization", b"").decode("latin-1")
-        if auth_header.startswith("Bearer "):
-            supplied = auth_header[len("Bearer "):]
-            if hmac.compare_digest(supplied, self.token):
-                authorized = True
-
-        if not authorized and self.allow_path and scope["path"].startswith(self.PATH_PREFIX):
+        supplied = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+        candidate, remainder = None, ""
+        if scope["path"].startswith(self.PATH_PREFIX):
             candidate, _, remainder = scope["path"][len(self.PATH_PREFIX):].partition("/")
-            if hmac.compare_digest(candidate, self.token):
-                authorized = True
-                new_path = "/" + remainder
-                scope = dict(scope)
-                scope["path"] = new_path
-                scope["raw_path"] = new_path.encode("utf-8")
 
-        if not authorized:
+        target, by_path = None, False
+        for token, app, allow_path in self.routes:
+            header_ok = hmac.compare_digest(supplied, token)
+            path_ok = allow_path and candidate is not None and hmac.compare_digest(candidate, token)
+            if target is None and (header_ok or path_ok):
+                target, by_path = app, not header_ok
+
+        if target is None:
             response = Response(status_code=404)
             await response(scope, receive, send)
             return
 
-        await self.app(scope, receive, send)
+        if by_path:
+            new_path = "/" + remainder
+            scope = dict(scope)
+            scope["path"] = new_path
+            scope["raw_path"] = new_path.encode("utf-8")
+        await target(scope, receive, send)
+
+
+_TOKEN_PATH = re.compile(r"/t/[^/\s\"']+")
+
+
+class RedactTokenPaths(logging.Filter):
+    """Keep path tokens out of uvicorn's access log (hard rule 1).
+
+    Uvicorn logs the path as the client sent it, before the middleware strips
+    a /t/<token>/ prefix, so without this a path-authenticated request writes
+    its token to the journal on every call."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(_TOKEN_PATH.sub("/t/<redacted>", a) if isinstance(a, str) else a
+                                for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = _TOKEN_PATH.sub("/t/<redacted>", record.msg)
+        return True
 
 
 def run_http(store: ContextStore, host: str, port: int) -> None:
@@ -411,21 +455,33 @@ def run_http(store: ContextStore, host: str, port: int) -> None:
         sys.exit(1)
     allow_path = os.environ.get("PA_AUTH_ALLOW_PATH", "0") == "1"
 
-    import asyncio
-    app_mcp = build_server(store)
+    # Optional second token, scoped to SHOP_SCOPE_TOOLS (task 212 phase 4).
+    # Absent means the route does not exist. Present but weak, or equal to the
+    # full token, is a misconfiguration and refuses to start, like the check
+    # above: a scoped token that silently were the full one protects nothing.
+    shop_token = os.environ.get("PA_SHOP_TOKEN", "")
+    if shop_token and (len(shop_token) < 32 or hmac.compare_digest(shop_token, token)):
+        log.error("PA_SHOP_TOKEN is shorter than 32 characters or equals PA_AUTH_TOKEN; refusing to start.")
+        sys.exit(1)
+    shop_allow_path = os.environ.get("PA_SHOP_ALLOW_PATH", "0") == "1"
 
-    session_manager = StreamableHTTPSessionManager(
-        app=app_mcp,
+    managers = [StreamableHTTPSessionManager(
+        app=build_server(store),
         json_response=False,   # stream responses; the client negotiates
         stateless=False,       # keep session tracking
-    )
-
-    async def handle_mcp(scope, receive, send):
-        await session_manager.handle_request(scope, receive, send)
+    )]
+    if shop_token:
+        managers.append(StreamableHTTPSessionManager(
+            app=build_server(store, allowed=SHOP_SCOPE_TOOLS),
+            json_response=False,
+            stateless=False,
+        ))
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        async with session_manager.run():
+        async with contextlib.AsyncExitStack() as stack:
+            for m in managers:
+                await stack.enter_async_context(m.run())
             yield
 
     # No routes: this Starlette app exists only to own the lifespan above,
@@ -435,25 +491,34 @@ def run_http(store: ContextStore, host: str, port: int) -> None:
     # "Task group is not initialized".
     starlette_app = Starlette(routes=[], lifespan=lifespan)
 
-    async def dispatch(scope, receive, send):
-        """Send /mcp (with or without a trailing slash) to the streamable HTTP
-        handler; everything else to Starlette.
+    def dispatcher(manager):
+        async def dispatch(scope, receive, send):
+            """Send /mcp (with or without a trailing slash) to this route's
+            streamable HTTP handler; everything else to Starlette.
 
-        handle_mcp is a raw ASGI app, so it needs no routing. Mounting it created
-        the trailing-slash requirement that Starlette's Mount imposes and that
-        claude.ai's connector does not satisfy — this states the intent directly
-        instead.
-        """
-        if scope["type"] == "http" and scope["path"].rstrip("/") == "/mcp":
-            await handle_mcp(scope, receive, send)
-        else:
-            await starlette_app(scope, receive, send)
+            The handler is a raw ASGI app, so it needs no routing. Mounting it
+            created the trailing-slash requirement that Starlette's Mount imposes
+            and that claude.ai's connector does not satisfy — this states the
+            intent directly instead.
+            """
+            if scope["type"] == "http" and scope["path"].rstrip("/") == "/mcp":
+                await manager.handle_request(scope, receive, send)
+            else:
+                await starlette_app(scope, receive, send)
+        return dispatch
 
-    asgi_app = AuthMiddleware(dispatch, token=token, allow_path=allow_path)
+    routes = [(token, dispatcher(managers[0]), allow_path)]
+    if shop_token:
+        routes.append((shop_token, dispatcher(managers[1]), shop_allow_path))
+    asgi_app = AuthMiddleware(routes)
 
+    logging.getLogger("uvicorn.access").addFilter(RedactTokenPaths())
     log.info("Streamable HTTP listening on http://%s:%d/mcp", host, port)
     if allow_path:
         log.info("Path-prefix auth fallback is ENABLED (PA_AUTH_ALLOW_PATH=1)")
+    if shop_token:
+        log.info("Shop-scoped token route is ENABLED (%s)%s", ", ".join(sorted(SHOP_SCOPE_TOOLS)),
+                 ", path-prefix allowed" if shop_allow_path else "")
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")
 
 def main() -> None:
