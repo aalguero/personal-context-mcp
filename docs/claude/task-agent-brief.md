@@ -2,13 +2,20 @@
 
 **Status: live since 2026-10-26. Migrated to the code project 2026-10-26/27 — see §11.**
 
-> **Which copy is authoritative.** This file, `docs/claude/task-agent-brief.md` in
-> `~/developer/futile-pa`. The running agent is the local scheduled task `task-checkin`
-> (`/home/andre/.claude/scheduled-tasks/task-checkin/SKILL.md`), which reads this file
-> directly off disk at the start of every run. The old copy in the claude.ai "Personal
-> Assistant" Project is now the export, not the master, and the Project's own scheduled
-> trigger (`trig_01LP3NydyjH9kb7VsfbjsLXY`) was disabled the night of 2026-10-27 — kept,
-> not deleted, so its run history survives. Migration completed per §11.
+> **Which copy is authoritative.** This file, `docs/claude/task-agent-brief.md` in the
+> repo (`github.com/aalguero/personal-context-mcp`), **as checked out on
+> futileassistant** at `/home/dremon/tools/personal-context-mcp/`. The running agent is
+> `futile-assistant.service` there. `assistant/checkin.py` reads this file off disk at
+> the start of every run, by a path relative to its own location (`BRIEF_PATH`), so an
+> edit is live once it's pulled on the server, with no restart. A commit on Andre's
+> laptop is not live until it's pushed and pulled.
+>
+> Superseded, kept for history (§11): the laptop's local scheduled task `task-checkin`,
+> which ran this brief from 2026-10-26 and is **disabled** (verified 2026-11-11, never
+> to be re-enabled: two agents would ask every question twice). Also the claude.ai
+> "Personal Assistant" Project copy, now an export, whose trigger
+> (`trig_01LP3NydyjH9kb7VsfbjsLXY`) was disabled 2026-10-27, kept so its run history
+> survives.
 
 This document is the agent's operating instructions — it reads this file at the start
 of every run, so editing this document changes the agent's behaviour. Do not edit it
@@ -63,10 +70,12 @@ ever talk to itself.
 
 ## 3. What it does on each run
 
-1. **Read this document** — a file read of
-   `/home/andre/developer/futile-pa/docs/claude/task-agent-brief.md`. (Before the
-   2026-10-26/27 migration this was `project_read` on the claude.ai Project copy — see
-   §11 for the history.)
+1. **Read this document.** Code does this for you: `checkin.py` reads
+   `docs/claude/task-agent-brief.md` from the server's checkout
+   (`/home/dremon/tools/personal-context-mcp/`) and puts it in your system prompt at
+   the start of every run. There's nothing to fetch. Before 2026-10-26/27 this was
+   `project_read` on the claude.ai Project copy, then a file read on Andre's laptop;
+   see §11 for the history.
 2. **Read its own state.** `get_context` category `task_agent`: last run, last reply
    from Andre, questions already asked and still unanswered, and the consecutive
    unanswered-run count.
