@@ -60,7 +60,7 @@ is how a restore was independently verified.
 
 | | |
 |---|---|
-| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `0facde4`, agent restarted 2026-11-12 17:14; MCP process still from `7177270` at 16:10, as nothing it runs changed) |
+| MCP server | `/home/dremon/tools/personal-context-mcp/server.py` (git: `github.com/aalguero/personal-context-mcp`, SSH remote, branch `main`, HEAD `391ebab`, both services restarted 2026-11-13 20:49) |
 | futile-pa | `/home/dremon/tools/personal-context-mcp/futile-pa` — inside the repo. Old tree at `/home/dremon/futile-pa.pre-git` |
 | Scripts | `futile-pa/scripts/` — `backup.sh`, `external_watchdog.py`, `recurrence_runner.py`, `deadman_ping.py`, `backup_alerts.py`, `prune_backups.py`, `migrate.py`. **Note the `futile-pa/` prefix** |
 | Interpreter | `/home/dremon/tools/personal-context-mcp/.venv-new/bin/python` — Python 3.13.5. **Not** `futile-pa/.venv-new` |
@@ -73,7 +73,7 @@ is how a restore was independently verified.
 | Auth | shared secret, ASGI middleware, all paths, **404 on failure**, fail-closed at startup |
 | Bind | **`127.0.0.1:8765` only**, since 2026-11-12 14:23 (task 219, Andre's decision). Every client goes through Funnel. Unit in git: `futile-pa/scripts/systemd/personal-context-mcp.service` (`785a99a`). Proved from shadow: tailnet and LAN direct went from 404 to connection refused; Funnel still answers. The Claude Code connector on shadow (`~/.claude.json`, `personal-context`) uses the Funnel URL; from shadow that hostname resolves to the tailnet address and reaches tailscaled on 443, which forwards to 127.0.0.1. **In the access log, port `0` means "arrived through tailscaled"** (`X-Forwarded-For` carries no port); a real port means a direct connection, which now can only be localhost |
 | Tools | **34** = 4 context tools + 25 `pa_*` + 5 `pa_shop_*`. The connector picks up new tools on its own after a few minutes; no reconnect needed. **The agent has two registries** (since `0facde4`): the check-in holds 27 (25 `pa_*` + `get_context`/`set_context`), Signal replies hold 32 (those + the five `pa_shop_*`) |
-| Migrations | **001–007 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30), 007_hard_deadline_guard (2026-11-12 16:10). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt spec once called "Migration 004", then "007", then "008", must now be **009** (task 218): 008 is `008_shopping_staples.sql` (task 212 phase 3, built 2026-11-13, not yet applied on production) |
+| Migrations | **001–008 applied.** 001_core, 002_reference_data, 003_situation_fit, 004_shopping, 005_overdue_and_defer, 006_deterministic_order (2026-11-11 22:30), 007_hard_deadline_guard (2026-11-12 16:10), 008_shopping_staples (2026-11-13 20:49). `pa.schema_migration` is keyed by **filename**, not version. The unbuilt task-gates spec, once "Migration 004", is provisionally **009** (backlog §H) |
 | Agent | fires 07:48 / 11:48 / 15:48 / 19:48 America/New_York. `main()` starts the Signal bridge as a daemon thread, then the scheduler |
 | Signal | `signal-cli-rest-api` in Docker, image pinned by digest, `MODE=normal`, `--log-driver none`, bound `127.0.0.1:8080`. **A separately registered account**, not a linked device. Discoverability off |
 | Monitoring | 5 external watchdog assertions + 2 dead-man checks + delivery receipts + a heartbeat on every fire. See `architecture/monitoring.md` |
@@ -224,6 +224,33 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
      2026-08-15, gitignored. Nothing in the repo writes it: `server.py` logs to stderr.
      A pre-systemd leftover, probably MCP traffic from August. **Andre reviewed it
      2026-11-13, found nothing sensitive, and removed it with `rm`.**
+10. **Task 212 phase 3: town trips carry the lists; the check-in asks about staples**
+    (`95739e5` + test fix `391ebab`, migration 008, `shop-phase3-report.md`, deployed
+    2026-11-13 20:49, MCP 444827 → 2524977, agent 575653 → 2525052).
+    - **The first run stopped at §5.2, correctly.** `test_shopping.py` gave 100/2 on a
+      production restore: two of its seed names were now real active items, and
+      `pa_shop_add` rightly said `updated_existing`. The suite assumed empty shopping
+      tables, and whole-table counts made prefixing names insufficient.
+    - `391ebab` makes it clear the restored shopping rows first, on scratch only
+      (refused at import, `current_database()` re-checked before the delete). Shadow
+      reproduced 100/2 with the old suite and 100/0 ×2 with the new one, which is now
+      rerunnable. The run-1 report is kept as `shop-phase3-run1-report.md`.
+    - **The re-run on a fresh restore:** staples 34/0 ×2 (counts identical before and
+      after), shopping 100/0 ×2, smoke 93, toolset 30, ledger 42, log_hygiene 43.
+    - **Production:** 008 applied, `v_shopping_staple` `0|0` (nothing bought yet).
+      Counts 233/3/0/0 unchanged. A read-only town-trip probe returned the `shopping`
+      key with 2 active items, 11 suggestions, and **0 events written**. The view runs
+      in 0.23 ms.
+    - **After the restart, six `GET /mcp` → 404 from shadow**, with none in the 6 h
+      before. Server's reading: MCP clients presenting session ids from the old
+      process. **Confirmed from shadow:** a `pa_sql` call over this session's
+      connector worked after the restart, so clients reconnect.
+    - The report said "102 checks". Wrong: the two `seed <name>` checks exist only
+      when a seed add fails. A clean run is 100.
+    - **Still pending:** the 07:48 11-14 fire. Pass is a `Check-in reply` line, a
+      `Check-in complete` line and **no `Could not read due staples`**. Staples stay
+      dormant until something is bought on 3 distinct days, so `record_staples_asked`'s
+      name matching gets its first real test weeks from now.
 
 ## What changed in the week of 2026-11-06
 

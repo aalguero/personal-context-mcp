@@ -15,7 +15,7 @@ later session needs in order not to relitigate it.
 tables, five `pa_shop_*` tools, and the Claude surface. **Phase 2 deployed 2026-11-12
 17:14** (`0facde4`, Signal, see below, `shop-phase2-report.md`). It needs no migration.
 Andre's live Signal test passed the same day, adding and removing a probe item with no
-task created. Phases 3 and 4 are open.
+task created. Phase 3 deployed 2026-11-13 (`95739e5` + `391ebab`). Phase 4 (voice) is deferred.
 
 ---
 
@@ -213,7 +213,7 @@ The payoff is not the list; it is not having to remember to open it.
 |---|---|---|---|
 | 1 | Migration, MCP tools, the Claude surface | Testable end to end with no Signal risk | **done, `80abf0b`** |
 | 2 | Signal add / read / check-off with echo-back | Depends on phase 1 being right | **done 2026-11-12**, `0facde4`, live-tested over Signal |
-| 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | **built 2026-11-13**, migration 008, deploy pending |
+| 3 | `town_trip` surfacing and staple prompting | Depends on having history to reason from | **deployed 2026-11-13 20:49**, migration 008, dormant until staples have history |
 | 4 | Voice capture on the Pi | Highest-value capture surface, least reliable host | **deferred 2026-11-13** (Andre), until voice stages 3–4 exist and the Pi stays on |
 
 **Voice is last on purpose.** Noticing you are out of coffee happens in the kitchen with
