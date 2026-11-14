@@ -67,6 +67,30 @@ atexit.register(db.close)
 
 FOR_DATE = "2026-11-10"
 
+# The shopping half of this suite asserts on whole-table facts ("two lists
+# created", "four rows bought in all", the milk row count), so it needs empty
+# shopping tables. Until Andre had real items those were empty on a restore
+# too; shop-phase3-report.md (2026-11-13) found two seed names colliding with
+# real active items on a production restore. So: start empty. This deletes
+# only shopping rows, only on a scratch database (checked at import above and
+# again here, in the database itself, right before the delete), and the
+# backlog half still runs on the restored tasks, which is the point of running
+# it on a restore at all. Shopping rows never affect the backlog; that is the
+# invariant this suite exists to prove.
+_dbname = db.value("select current_database()")
+if not (_dbname == "pa_verify" or _dbname.startswith("pa_scratch")):
+    sys.exit(f"test_shopping.py: REFUSING to clear shopping tables on {_dbname!r}")
+# shopping_staple_prompt exists from migration 008 on; an older schema has none.
+_tables = [t for t in ("shopping_staple_prompt", "shopping_item", "shopping_list")
+           if db.value("select to_regclass(%s) is not null", (f"pa.{t}",))]
+_restored = {t: db.value(f"select count(*) from pa.{t}") for t in _tables}
+if "shopping_staple_prompt" in _tables:
+    db.execute("delete from pa.shopping_staple_prompt")
+db.execute("delete from pa.shopping_item")
+db.execute("delete from pa.shopping_list")
+print(f"Cleared restored shopping rows on {_dbname}: "
+      + ", ".join(f"{n} {t}" for t, n in _restored.items()))
+
 
 def _tasks_only(result: dict) -> dict:
     """A suggest() result without its town_trip `shopping` attachment.
