@@ -134,6 +134,17 @@ def shop_add(name: str, category: str | None = None, subcategory: str | None = N
                              "unless the list has a default category")
         if db.value("select pa.shop_normalize(%s)", (name,)) == "":
             raise ValueError(f"'{name}' is empty once punctuation is removed")
+        # The active row this add would collide with, read before the upsert in
+        # the same transaction, so the reply can say what actually changed. Only
+        # the message depends on it; the upsert stays the race-free source of
+        # truth for whether a row was inserted.
+        before = db.row(
+            """select quantity, store, subcategory, notes from pa.shopping_item
+                where coalesce(list_id, 0) = coalesce(%s, 0) and category = %s
+                  and normalized_name = pa.shop_normalize(%s)
+                  and bought_at is null and removed_at is null""",
+            ((lst or {}).get("id"), category, name),
+        ) or {}
         row = db.row(
             """
             insert into pa.shopping_item as i
@@ -158,15 +169,27 @@ def shop_add(name: str, category: str | None = None, subcategory: str | None = N
         )
         item = _item(db, row["id"])
     where = f"list '{item['list_name']}'" if item.get("list_name") else f"the {category} list"
+    changed = []   # field names; `list` is a parameter here, so no annotation
     if row["inserted"]:
         action = "added"
         msg = f"Added {item['name']} to {where}."
     else:
+        # Same action name as before, so callers keyed on it are unaffected.
+        # The message says plainly when nothing changed, because a reply of
+        # "updated it" for a no-op is read, and spoken by a voice agent, as if
+        # something happened (task 212 phase 4, 2026-11-14).
         action = "updated_existing"
-        msg = f"{item['name']} was already on {where}; updated it instead of adding a second."
+        for field in ("quantity", "store", "subcategory", "notes"):
+            if item.get(field) != before.get(field):
+                changed.append(field)
+        if not changed:
+            msg = f"{item['name']} is already on {where}."
+        else:
+            parts = [("note added" if f == "notes" else f"{f} is now {item.get(f)}") for f in changed]
+            msg = f"{item['name']} was already on {where}; " + "; ".join(parts) + "."
     if created_list:
         msg = f"Created new list '{created_list}'. " + msg
-    return {"action": action, "created_list": created_list, "message": msg, "item": item}
+    return {"action": action, "created_list": created_list, "changed": changed, "message": msg, "item": item}
 
 
 def shop_update(item_id: int, list: Any = None, clear_list: bool = False,

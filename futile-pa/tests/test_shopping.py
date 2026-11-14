@@ -403,6 +403,37 @@ check("an implicit list has no default category, so one is still required",
       call("pa_shop_add", {"name": "fishing line", "list": "camping trip"}).get("error") is not None)
 
 # ---------------------------------------------------------------------------
+section("A duplicate add says plainly what it changed (2026-11-14)")
+# Found through voice: a no-op duplicate replied "updated it instead of adding
+# a second", which the voice agent turned into a long spoken non-answer.
+r0 = call("pa_shop_add", {"name": "zqdup soap", "category": "grocery"})
+r1 = call("pa_shop_add", {"name": "zqdup soap", "category": "grocery"})
+check("first add is added, with nothing changed", r0.get("action") == "added" and r0.get("changed") == [], json.dumps(r0)[:160])
+check("no-op duplicate: action unchanged for callers", r1.get("action") == "updated_existing", r1.get("action", ""))
+check("no-op duplicate: changed is empty", r1.get("changed") == [], str(r1.get("changed")))
+check("no-op duplicate: says only that it is already there",
+      r1.get("message") == "zqdup soap is already on the grocery list.", r1.get("message", ""))
+r2 = call("pa_shop_add", {"name": "ZQDUP soap.", "category": "Grocery", "quantity": "2 bars"})
+check("new quantity: changed is exactly quantity", r2.get("changed") == ["quantity"], str(r2.get("changed")))
+check("new quantity: the message names it",
+      r2.get("message") == "zqdup soap was already on the grocery list; quantity is now 2 bars.", r2.get("message", ""))
+r3 = call("pa_shop_add", {"name": "zqdup soap", "category": "grocery", "notes": "unscented"})
+check("new note: changed is exactly notes, message says note added",
+      r3.get("changed") == ["notes"] and r3.get("message", "").endswith("; note added."), json.dumps(r3)[:200])
+r4 = call("pa_shop_add", {"name": "zqdup soap", "category": "grocery", "notes": "Unscented"})
+check("a note already contained changes nothing, and says so",
+      r4.get("changed") == [] and r4.get("message") == "zqdup soap is already on the grocery list.", json.dumps(r4)[:200])
+r5 = call("pa_shop_add", {"name": "zqdup soap", "category": "grocery", "quantity": "2 bars", "store": "Coop"})
+check("same quantity plus new store: only store is reported",
+      r5.get("changed") == ["store"] and r5.get("message", "").endswith("; store is now Coop."), json.dumps(r5)[:200])
+msgs = " ".join(r.get("message", "") for r in (r0, r1, r2, r3, r4, r5))
+check("no message says 'updated it instead'", "updated it instead" not in msgs)
+check("no message has a task-id shape", not _TASK_ID_PATTERN.search(msgs), msgs[:200])
+check("still exactly one active zqdup soap row",
+      db.value("select count(*) from pa.shopping_item where normalized_name = 'zqdup soap' "
+               "and bought_at is null and removed_at is null") == 1)
+
+# ---------------------------------------------------------------------------
 section("Phase 3: a town trip carries the lists, alongside and never inside")
 tt = repo.suggest(situation="town_trip", limit=25)
 active = db.value("select count(*) from pa.shopping_item where bought_at is null and removed_at is null")
