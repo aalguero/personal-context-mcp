@@ -90,11 +90,36 @@ Then, in the conversation agent's options, select the MCP server as its LLM API 
 
 ## Step 4: the voice pipeline
 
-Settings → Voice assistants → your pipeline (the one the Pi uses):
-- **Conversation agent:** the agent from step 2.
-- **Prefer handling commands locally: ON.** Home commands stay local and only unmatched
-  speech reaches the LLM. Without it, "turn off the kitchen lights" would cost an API
-  call and depend on the internet.
+Labels vary by HA version, so each part says what the setting does, then the label
+expected. HA's docs (voice_control pages, checked 2026-11-14) confirm the shape but not
+every label.
+
+**A. Make a new assistant; don't edit the current one.** Settings → Voice assistants →
+**Add assistant**, named e.g. "Futile". The existing assistant stays as a fallback: if
+anything misbehaves, point the Pi back at it.
+
+**B. Fill it in:**
+- **Conversation agent:** the LLM agent from step 2.
+- **The local-first toggle** appears under the agent once an LLM is chosen ("Prefer
+  handling commands locally"; HA's docs call it the fallback toggle). **ON.** Home
+  commands stay local and only unmatched speech reaches the LLM. Without it, "turn off
+  the kitchen lights" would cost an API call and depend on the internet.
+- **Speech-to-text:** the same Whisper (Wyoming) as now. **Text-to-speech:** the same
+  engine as the current assistant.
+
+**C. Give the agent the shopping tools.** Use the gear icon next to the agent's name, or
+the LLM integration's **Configure** page. In the tool section ("AI tools", or "Control
+Home Assistant" with a list of APIs), **select the MCP server.** Leave **Assist / Device
+control** unticked: local handling already covers the house, and leaving it off means
+the LLM can't operate devices at all. **If the MCP server isn't offered, stop:** that's
+unknown 0.3 failing.
+
+**D. Point the Pi at it:** Settings → Devices & services → ESPHome → the Pi's voice
+device (Linux Voice Assistant) → Configuration → **Assistant** → "Futile". That's how
+ESPHome voice devices usually pick an assistant; not yet confirmed for LVA.
+
+**E. Typed test first** (step 5.2): the assistant's **⋮** menu → **Start a
+conversation**.
 
 ## Step 5: prove it, in this order
 
