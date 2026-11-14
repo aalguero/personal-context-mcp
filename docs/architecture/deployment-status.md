@@ -251,6 +251,24 @@ Four briefs, four reports, every claim checked from the shadow side afterwards.
       `Check-in complete` line and **no `Could not read due staples`**. Staples stay
       dormant until something is bought on 3 distinct days, so `record_staples_asked`'s
       name matching gets its first real test weeks from now.
+11. **Task 212 phase 4, server side: the shop-only token** (`639cf6c` + docs
+    `55eb607`, `shop-voice-report.md`, deployed 2026-11-13 ~23:40, MCP 2524977 →
+    2730984, agent untouched). Deployed by `git merge --ff-only 55eb607`, so
+    `f42dbaf` (the context store, already on origin) was **not** deployed with it.
+    - `test_server_scopes.py` passed 30/0 ×2 on the server. `PA_SHOP_TOKEN` was
+      generated in-process into `.env` (length 43, mode 600, never printed).
+    - **Live:** the full token lists 34 tools, the shop token exactly `pa_shop_add` and
+      `pa_shop_list`. Neither token appears in 45 journal lines, 10 of them access-log
+      `POST /mcp` lines (the positive control). `/.well-known/*` and unauthenticated
+      `/mcp` return 404.
+    - `PA_AUTH_ALLOW_PATH=0` before and after. The pre-restart journal had 0
+      token-shaped `/t/` lines, so the old fallback had never leaked.
+    - **Found after the deploy, from HA's docs and Andre's dialog:** HA's MCP client
+      tries streamable HTTP first, which works, but has **no header field**. So the HA
+      side needs the path form: `PA_SHOP_ALLOW_PATH=1`, not yet set.
+    - **Brief nit, from the report:** `migrate.py | tail -1; echo $?` reports
+      `tail`'s exit code, and `up to date` is printed even after applying everything.
+      Future briefs should use `${PIPESTATUS[0]}` and check `pa.schema_migration`.
 
 ## What changed in the week of 2026-11-06
 
