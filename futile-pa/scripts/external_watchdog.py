@@ -45,7 +45,7 @@ class name or an HTTP status.
 
 Usage:
   external_watchdog.py              # the nightly run (backup.sh calls this)
-  external_watchdog.py --dry-run    # verdicts only: no send, no database
+  external_watchdog.py --dry-run    # verdicts only: no send, no task writes (reads pa.agent_state)
   external_watchdog.py --test-message [--api-base URL]
   external_watchdog.py --context-file FILE   # synthetic input; messages say [TEST]
 """
@@ -65,7 +65,12 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 ENV_FILE = "/home/dremon/tools/personal-context-mcp/.env"
-CONTEXT_FILE = "/home/dremon/.personal-context/context.json"
+# The stamps live in pa.agent_state since migration 009 (they were in
+# context.json). Reading them now needs Postgres, which is fine for the
+# property above: a database that cannot be read makes every stamp
+# STORE_UNREADABLE, which alerts, and the alert itself still goes straight to
+# the Signal container. --context-file still reads a context.json-shaped file,
+# for synthetic tests.
 STATUS_FILE = "/home/dremon/.personal-context/backup-status.json"
 SIGNAL_CONTAINER = "signal-cli-rest-api"
 TZ = ZoneInfo("America/New_York")
@@ -86,7 +91,7 @@ RECURRENCE_STALE_AFTER = timedelta(hours=26)
 FUTURE_TOLERANCE = timedelta(minutes=10)
 CONTAINER_READY_TIMEOUT = 180  # health check interval is 20s
 
-MISSING_FILE = object()
+STORE_UNREADABLE = object()
 MISSING_KEY = object()
 
 ALERTS = {
@@ -167,10 +172,10 @@ def _check_stamp(raw: object, now: datetime, field: str, stale: str, fresh: str,
     """('ok' | 'alert', reason). Anything that is not positive proof of a
     recent success alerts: a watchdog that cannot read its input must say so,
     not go quiet."""
-    if raw is MISSING_FILE:
-        return "alert", f"the context store file is missing, so {field} cannot be checked"
+    if raw is STORE_UNREADABLE:
+        return "alert", f"the agent state could not be read (database unreachable, or the test file missing), so {field} cannot be checked"
     if raw is MISSING_KEY or raw in (None, ""):
-        return "alert", f"the context store has no {category}.{field}"
+        return "alert", f"the agent state has no {category}.{field}"
     try:
         stamp = datetime.fromisoformat(str(raw))
     except ValueError:
@@ -264,23 +269,40 @@ def check_off_machine(status: object) -> tuple[str, str]:
                     + (f" ({', '.join(failed)} did not)" if failed else ""))
 
 
-def read_last_run_at(path: str = CONTEXT_FILE) -> object:
+def read_last_run_at(path: str | None = None) -> object:
     return read_watchdog_field("last_run_at", path)
 
 
-def read_watchdog_field(key: str, path: str = CONTEXT_FILE,
+def read_watchdog_field(key: str, path: str | None = None,
                         category: str = "task_agent_watchdog") -> object:
+    """From pa.agent_state, or from a context.json-shaped file when `path` is
+    given (synthetic tests only)."""
+    if path is None:
+        return _read_agent_state(category, key)
     try:
         with open(path) as fh:
             data = json.load(fh)
     except FileNotFoundError:
-        return MISSING_FILE
+        return STORE_UNREADABLE
     except (OSError, ValueError):
         return "unreadable"  # check_checkin turns this into an unparseable alert
     entry = (data.get("contexts") or {}).get(category)
     if not isinstance(entry, dict) or key not in entry:
         return MISSING_KEY
     return entry[key]
+
+
+def _read_agent_state(category: str, key: str) -> object:
+    try:
+        from pa.db import get_db
+        row = get_db().row("select value from pa.agent_state where namespace = %s and key = %s",
+                           (category, key))
+    except Exception as e:  # class name only: no DSN, no traceback
+        log(f"reading {category}.{key} failed ({type(e).__name__})")
+        return STORE_UNREADABLE
+    if row is None or "value" not in row:   # Db.row drops a JSON null with the column
+        return MISSING_KEY
+    return row["value"]
 
 
 def read_status(path: str = STATUS_FILE) -> object:
@@ -413,7 +435,7 @@ def message(marker: str, reason: str, task_id: int | None, test: bool = False,
 
 def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
     now = datetime.now(timezone.utc)
-    ctx = context_file or CONTEXT_FILE
+    ctx = context_file  # None: the real store, pa.agent_state
     verdicts = {
         "checkin_stale": check_checkin(read_watchdog_field("last_run_at", ctx), now),
         "delivery_stale": check_delivered(read_watchdog_field("last_delivered_at", ctx), now),
@@ -458,7 +480,7 @@ def run(api_base: str, dry_run: bool, context_file: str | None = None) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true", help="verdicts only: no send, no database")
+    ap.add_argument("--dry-run", action="store_true", help="verdicts only: no send, no task writes")
     ap.add_argument("--test-message", action="store_true",
                     help="send one clearly marked test message, then exit (no database)")
     ap.add_argument("--api-base", default=None,

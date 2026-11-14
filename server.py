@@ -15,11 +15,8 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
-import tempfile
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +55,7 @@ from pa.tools import TOOLS as PA_TOOLS, dispatch as pa_dispatch
 # imports pa.tools.TOOLS wholesale and must not gain them until phase 2.
 from pa.shop import SHOP_TOOLS, SHOP_TOOL_NAMES, dispatch as shop_dispatch
 from pa.db import Db, set_db
+from pa.profile import CHAT, ContextError, ContextService
 
 # The check-in agent's code-owned task_agent keys (task 213). Loaded by file
 # path, not imported as assistant.agent_keys: importing the assistant package
@@ -89,10 +87,11 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("personal-context-mcp")
 
 # ---------------------------------------------------------------------------
-# Storage
+# Storage: the context store is in Postgres since migration 009 (pa/profile.py,
+# shared with the agent). Personal context is in schema `profile`, walled off
+# from pa_sql; the agents' own state is in pa.agent_state. context.json is
+# retired, and --store is accepted only so an old unit file still starts.
 # ---------------------------------------------------------------------------
-DEFAULT_STORE = Path.home() / ".personal-context" / "context.json"
-
 # Task 212 phase 4 (Andre, 2026-11-13): voice capture through Home Assistant
 # gets its own token, PA_SHOP_TOKEN, which reaches ONLY these tools. HA sits
 # behind a microphone anyone in the room can talk to; PA_AUTH_TOKEN reaches
@@ -103,118 +102,16 @@ DEFAULT_STORE = Path.home() / ".personal-context" / "context.json"
 SHOP_SCOPE_TOOLS = frozenset({"pa_shop_add", "pa_shop_list"})
 
 
-class ContextStore:
-    """
-    JSON file-backed key/value store with optional category namespacing.
 
-    Structure on disk:
-    {
-      "meta": { "updated_at": "...", "version": 1 },
-      "contexts": {
-        "work": { "role": "...", "company": "..." },
-        "tech": { "stack": "...", "editor": "..." },
-        ...
-      }
-    }
-    """
-
-    VERSION = 1
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._write({"meta": {"version": self.VERSION, "updated_at": self._now()}, "contexts": {}})
-
-    # ---- public API --------------------------------------------------------
-
-    def get(self, category: str | None = None) -> dict:
-        data = self._read()
-        ctx = data["contexts"]
-        if category:
-            return ctx.get(category, {})
-        return ctx
-
-    def set(self, category: str, key: str, value: Any) -> None:
-        data = self._read()
-        data["contexts"].setdefault(category, {})[key] = value
-        data["meta"]["updated_at"] = self._now()
-        self._write(data)
-
-    def delete(self, category: str, key: str | None = None) -> bool:
-        data = self._read()
-        ctx = data["contexts"]
-        if category not in ctx:
-            return False
-        if key is None:
-            del ctx[category]
-        else:
-            if key not in ctx[category]:
-                return False
-            del ctx[category][key]
-            if not ctx[category]:          # prune empty category
-                del ctx[category]
-        data["meta"]["updated_at"] = self._now()
-        self._write(data)
-        return True
-
-    def list_categories(self) -> list[str]:
-        return list(self._read()["contexts"].keys())
-
-    def meta(self) -> dict:
-        return self._read()["meta"]
-
-    # ---- internals ---------------------------------------------------------
-
-    def _read(self) -> dict:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            log.error("Could not read context store: %s", exc)
-            return {"meta": {"version": self.VERSION, "updated_at": self._now()}, "contexts": {}}
-
-    def _write(self, data: dict) -> None:
-        """Write atomically: a crash mid-write must not truncate the store.
-
-        Write a temp file in the same directory, fsync it, then os.replace —
-        which is atomic on POSIX. Same directory matters, because replace
-        across filesystems is not atomic. Rotate up to 3 backups first, since
-        this file has no other recovery path.
-        """
-        self._rotate_backups()
-        payload = json.dumps(data, indent=2, ensure_ascii=False)
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".context-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
-
-    def _rotate_backups(self, keep: int = 3) -> None:
-        if not self.path.exists():
-            return
-        for i in range(keep - 1, 0, -1):
-            src = self.path.with_suffix(self.path.suffix + f".{i}")
-            dst = self.path.with_suffix(self.path.suffix + f".{i + 1}")
-            if src.exists():
-                os.replace(src, dst)
-        shutil.copy2(self.path, self.path.with_suffix(self.path.suffix + ".1"))
-
-    @staticmethod
-    def _now() -> str:
-        return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+def _ctx_json(obj: Any) -> str:
+    return json.dumps(obj, indent=2, ensure_ascii=False, default=str)
 
 
 # ---------------------------------------------------------------------------
 # MCP Server definition
 # ---------------------------------------------------------------------------
 
-def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> Server:
+def build_server(store: ContextService, allowed: frozenset[str] | None = None) -> Server:
     """The MCP server. `allowed` None is the full surface; a set restricts both
     the tool list and dispatch to those names (the shop-token server)."""
     app = Server("personal-context")
@@ -231,16 +128,18 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
             Tool(
                 name="get_context",
                 description=(
-                    "Retrieve personal context about the user. "
-                    "Call with no arguments to get everything, or pass a category "
-                    "(e.g. 'work', 'tech', 'projects') to get only that section."
+                    "Retrieve personal context about the user. Pass a category "
+                    "(e.g. 'health', 'hobbies') to get that section. With no category, "
+                    "returns every normal category plus an index of the sensitive ones "
+                    "(health, money and the like), which must be asked for by name — "
+                    "only fetch a sensitive category when the conversation needs it."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "category": {
                             "type": "string",
-                            "description": "Optional category name to fetch (e.g. 'work', 'tech').",
+                            "description": "Optional category name to fetch (e.g. 'hobbies', 'health').",
                         }
                     },
                     "required": [],
@@ -250,13 +149,15 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
                 name="set_context",
                 description=(
                     "Store or update a piece of personal context. "
-                    "Provide a category (e.g. 'work'), a key (e.g. 'role'), "
-                    "and the value. Creates the category if it doesn't exist."
+                    "Provide a category (e.g. 'hobbies'), a key (e.g. 'fly_fishing'), "
+                    "and the value. Creates the category if it doesn't exist. The previous "
+                    "value is kept in the history (context_history), so update in place "
+                    "rather than adding dated keys like 'holdings_apr2026'."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "category": {"type": "string", "description": "Category bucket (e.g. 'work', 'tech', 'projects')."},
+                        "category": {"type": "string", "description": "Category: lowercase letters, digits, underscores (e.g. 'hobbies')."},
                         "key":      {"type": "string", "description": "Field name within the category."},
                         "value":    {"description": "The value to store (string, number, list, or object)."},
                     },
@@ -265,20 +166,55 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
             ),
             Tool(
                 name="list_categories",
-                description="List all context categories that have been stored.",
+                description="List every context category with its tier (normal / sensitive), description, key count and last update.",
                 inputSchema={"type": "object", "properties": {}, "required": []},
             ),
             Tool(
                 name="delete_context",
                 description=(
                     "Delete a specific key from a category, or an entire category. "
-                    "Omit 'key' to delete the whole category."
+                    "Omit 'key' to delete the whole category. Deleted values stay in the history."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "category": {"type": "string", "description": "Category to target."},
                         "key":      {"type": "string", "description": "Specific key to remove (omit to remove entire category)."},
+                    },
+                    "required": ["category"],
+                },
+            ),
+            Tool(
+                name="context_history",
+                description=(
+                    "Past values of a context category or one key, newest first: when, who "
+                    "(chat, agent, code, import), and the old and new value. Use it to answer "
+                    "'what did this say before' or to recover something overwritten or deleted."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string"},
+                        "key":      {"type": "string", "description": "Optional: one key's history only."},
+                        "limit":    {"type": "integer", "default": 20, "maximum": 200},
+                    },
+                    "required": ["category"],
+                },
+            ),
+            Tool(
+                name="context_category",
+                description=(
+                    "Describe a context category, or create one and set its description and "
+                    "tier. Tier 'sensitive' keeps it out of an unscoped get_context and away "
+                    "from the Signal check-in agent; it is scoping, not security. With only a "
+                    "category, shows its current settings."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "category":    {"type": "string"},
+                        "description": {"type": "string", "description": "What belongs in this category and what it is for."},
+                        "tier":        {"type": "string", "enum": ["normal", "sensitive"]},
                     },
                     "required": ["category"],
                 },
@@ -290,6 +226,9 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
 
     # ---- Tool handlers -----------------------------------------------------
 
+    def _text(t: str) -> list[TextContent]:
+        return [TextContent(type="text", text=t)]
+
     @app.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         arguments = arguments or {}
@@ -297,7 +236,7 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
         # Same answer as a name that does not exist at all: a scoped client
         # learns nothing about what the full server holds.
         if allowed is not None and name not in allowed:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            return _text(f"Unknown tool: {name}")
 
         if name.startswith("pa_"):
             args = {k: v for k, v in arguments.items() if v is not None}
@@ -305,62 +244,93 @@ def build_server(store: ContextStore, allowed: frozenset[str] | None = None) -> 
             return [TextContent(type="text", text=json.dumps(
                 run(name, args), ensure_ascii=False, indent=2, default=str))]
 
-        if name == "get_context":
-            category = arguments.get("category")
-            result = store.get(category)
-            if not result:
-                msg = (
-                    f"No context found for category '{category}'."
-                    if category
-                    else "No personal context has been stored yet."
-                )
-                return [TextContent(type="text", text=msg)]
-            label = f"Context — {category}" if category else "Personal context (all categories)"
-            text = f"**{label}**\n\n```json\n{json.dumps(result, indent=2, ensure_ascii=False)}\n```"
-            return [TextContent(type="text", text=text)]
+        if name in CONTEXT_TOOL_NAMES:
+            try:
+                return _text(_context_tool(store, name, arguments))
+            except ContextError as exc:      # worded for the caller, carries no value
+                return _text(str(exc))
+            except Exception as exc:         # class name only: hard rule 8
+                log.error("context tool %s failed (%s)", name, type(exc).__name__)
+                return _text(f"{name} failed ({type(exc).__name__}); nothing was changed.")
 
-        if name == "set_context":
-            category = arguments["category"]
-            key      = arguments["key"]
-            value    = arguments["value"]
-            refused = agent_keys.refusal(category, key)
-            if refused:
-                return [TextContent(type="text", text=refused)]
-            store.set(category, key, value)
-            return [TextContent(type="text", text=f"✓ Saved `{category}.{key}`.")]
-
-        if name == "list_categories":
-            cats = store.list_categories()
-            meta = store.meta()
-            if not cats:
-                return [TextContent(type="text", text="No context categories stored yet.")]
-            lines = "\n".join(f"• {c}" for c in sorted(cats))
-            text = f"**Stored categories** (last updated {meta.get('updated_at', '?')}):\n{lines}"
-            return [TextContent(type="text", text=text)]
-
-        if name == "delete_context":
-            category = arguments["category"]
-            key      = arguments.get("key")
-            refused = agent_keys.refusal(category, key, whole_category=key is None)
-            if refused:
-                return [TextContent(type="text", text=refused)]
-            deleted  = store.delete(category, key)
-            if not deleted:
-                target = f"`{category}.{key}`" if key else f"category `{category}`"
-                return [TextContent(type="text", text=f"Nothing found at {target}.")]
-            target = f"`{category}.{key}`" if key else f"category `{category}` (and all its keys)"
-            return [TextContent(type="text", text=f"✓ Deleted {target}.")]
-
-        return [TextContent(type="text", text=f"Unknown tool: {name}")]
+        return _text(f"Unknown tool: {name}")
 
     return app
+
+
+CONTEXT_TOOL_NAMES = frozenset({"get_context", "set_context", "list_categories",
+                                "delete_context", "context_history", "context_category"})
+
+
+def _context_tool(store: ContextService, name: str, a: dict) -> str:
+    if name == "get_context":
+        category = a.get("category")
+        if category:
+            result = store.get(category)
+            if not result:
+                return f"No context found for category '{category}'."
+            return f"**Context — {category}**\n\n```json\n{_ctx_json(result)}\n```"
+        everything = store.get_all()
+        if not everything["contexts"] and not everything["sensitive"]:
+            return "No personal context has been stored yet."
+        text = (f"**Personal context (normal categories)**\n\n"
+                f"```json\n{_ctx_json(everything['contexts'])}\n```")
+        if everything["sensitive"]:
+            lines = "\n".join(f"• {s['category']}" + (f" — {s['description']}" if s["description"] else "")
+                              for s in everything["sensitive"])
+            text += ("\n\n**Sensitive categories, not included** (ask by name, only when the "
+                     f"conversation needs one):\n{lines}")
+        if everything["agent_state"]:
+            text += ("\n\n**Agent state, not included** (ask by name): "
+                     + ", ".join(everything["agent_state"]))
+        return text
+
+    if name == "set_context":
+        category, key = a["category"], a["key"]
+        store.set(category, key, a["value"])
+        return f"✓ Saved `{category}.{key}`."
+
+    if name == "list_categories":
+        cats = store.list_categories()
+        if not cats:
+            return "No context categories stored yet."
+        lines = []
+        for c in cats:
+            tier = "" if c.get("tier") == "normal" else f" [{c.get('tier')}]"
+            desc = f" — {c['description']}" if c.get("description") else ""
+            lines.append(f"• {c['category']}{tier} ({c.get('keys', 0)} keys, "
+                         f"updated {c.get('updated_at', '?')}){desc}")
+        return "**Stored categories**\n" + "\n".join(lines)
+
+    if name == "delete_context":
+        category, key = a["category"], a.get("key")
+        if not store.delete(category, key):
+            target = f"`{category}.{key}`" if key else f"category `{category}`"
+            return f"Nothing found at {target}."
+        target = f"`{category}.{key}`" if key else f"category `{category}` (and all its keys)"
+        return f"✓ Deleted {target}. The old values are in context_history."
+
+    if name == "context_history":
+        rows = store.history(a["category"], a.get("key"), a.get("limit", 20))
+        if not rows:
+            return f"No history for `{a['category']}" + (f".{a['key']}`." if a.get("key") else "`.")
+        return f"**History — {a['category']}" + (f".{a['key']}" if a.get("key") else "") + \
+               f"** (newest first)\n\n```json\n{_ctx_json(rows)}\n```"
+
+    if name == "context_category":
+        r = store.describe(a["category"], a.get("description"), a.get("tier"))
+        if not r:
+            return f"No category `{a['category']}` (give a description or tier to create it)."
+        return f"```json\n{_ctx_json(r)}\n```"
+
+    raise ContextError(f"Unknown tool: {name}")
 
 
 # ---------------------------------------------------------------------------
 # Entry point — stdio or streamable HTTP
 # ---------------------------------------------------------------------------
 
-def run_stdio(store: ContextStore) -> None:
+def run_stdio(store: ContextService) -> None:
     import asyncio
 
     async def _main():
@@ -441,7 +411,7 @@ class RedactTokenPaths(logging.Filter):
         return True
 
 
-def run_http(store: ContextStore, host: str, port: int) -> None:
+def run_http(store: ContextService, host: str, port: int) -> None:
     if not HTTP_AVAILABLE:
         log.error("The HTTP transport requires: pip install mcp[cli] starlette uvicorn")
         sys.exit(1)
@@ -529,20 +499,20 @@ def main() -> None:
                          help=argparse.SUPPRESS)  # deprecated alias for --http; kept for the systemd unit
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="HTTP port (default: 8765)")
-    parser.add_argument("--store", default=str(DEFAULT_STORE), help="Path to context.json file")
+    parser.add_argument("--store", default=None, help=argparse.SUPPRESS)  # retired with context.json (009)
     args = parser.parse_args()
 
-    store = ContextStore(Path(args.store))
-    log.info("Context store: %s", store.path)
+    if args.store:
+        log.warning("--store is ignored: the context store is in Postgres since migration 009")
 
     dsn = os.environ.get("PA_DATABASE_URL")
-    if dsn:
-        set_db(Db(url=dsn, actor="andre"))
-    else:
-        log.warning(
-            "PA_DATABASE_URL is not set — the pa_* task tools will fail. "
-            "The context tools will work normally."
-        )
+    if not dsn:
+        # Fail closed: since 009 the context tools need the database too, and a
+        # server that started anyway would answer every get_context with an error.
+        sys.exit("PA_DATABASE_URL is not set — the context and pa_* tools both need it")
+    set_db(Db(url=dsn, actor="andre"))
+    store = ContextService(CHAT, agent_keys)
+    log.info("Context store: Postgres (schema profile, pa.agent_state)")
 
     if args.http_mode:
         run_http(store, args.host, args.port)

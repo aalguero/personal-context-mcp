@@ -52,8 +52,11 @@ REPEAT_WINDOW = timedelta(hours=24)   # the brief's no-repeat rule, checked afte
 TZ = ZoneInfo("America/New_York")
 log = logging.getLogger("futile-assistant.ledger")
 
-# context_store.set() locks one key's write; these functions read-modify-write
-# several keys, from two threads (scheduler and Signal bridge).
+# Each context_store.set() is one row upsert; these functions read-modify-write
+# several keys, from two threads (scheduler and Signal bridge). Only this
+# process writes these keys (server.py and the database refuse everyone else),
+# so an in-process lock is enough. code=True on every write: these are the
+# code-owned keys of task 213, and the database refuses them without it.
 _lock = threading.Lock()
 
 
@@ -123,9 +126,9 @@ def _adopt_legacy(state: dict, now: datetime) -> dict:
         existing = state.get(LEGACY_KEY)
         merged = dict(existing) if isinstance(existing, dict) else {}
         merged[_iso(now)] = legacy
-        context_store.set(CATEGORY, LEGACY_KEY, merged)
+        context_store.set(CATEGORY, LEGACY_KEY, merged, code=True)
         for key in clean:
-            context_store.set(CATEGORY, key, clean[key])
+            context_store.set(CATEGORY, key, clean[key], code=True)
         log.info("Moved pre-213 prose out of %d code-owned task_agent key(s) into %s",
                  len(legacy), LEGACY_KEY)
     return clean
@@ -162,11 +165,11 @@ def record_questions(sent_text: str, db: Any, now: datetime | None = None) -> li
         for i in ids:
             asked[str(i)] = _iso(now)
             opened[str(i)] = _iso(now)
-        context_store.set(CATEGORY, "asked_recently", asked)
-        context_store.set(CATEGORY, "open_questions", opened)
+        context_store.set(CATEGORY, "asked_recently", asked, code=True)
+        context_store.set(CATEGORY, "open_questions", opened, code=True)
         # Every delivered question run is a strike until he replies, ids or
         # not: three strikes counts runs that spoke and were not answered.
-        context_store.set(CATEGORY, "unanswered_runs", state["unanswered_runs"] + 1)
+        context_store.set(CATEGORY, "unanswered_runs", state["unanswered_runs"] + 1, code=True)
     log.info("Recorded %d asked task id(s)", len(ids))
     return ids
 
@@ -176,8 +179,8 @@ def record_reply(now: datetime | None = None) -> None:
     now = now or _now()
     with _lock:
         _adopt_legacy(context_store.get(CATEGORY), now)
-        context_store.set(CATEGORY, "last_reply_at", _iso(now))
-        context_store.set(CATEGORY, "unanswered_runs", 0)
+        context_store.set(CATEGORY, "last_reply_at", _iso(now), code=True)
+        context_store.set(CATEGORY, "unanswered_runs", 0, code=True)
 
 
 def prune_open_questions(db: Any, now: datetime | None = None) -> list[int]:
@@ -214,7 +217,7 @@ def prune_open_questions(db: Any, now: datetime | None = None) -> list[int]:
                 dropped.append(int(k))
         if dropped:
             context_store.set(CATEGORY, "open_questions",
-                              {k: v for k, v in opened.items() if int(k) not in dropped})
+                              {k: v for k, v in opened.items() if int(k) not in dropped}, code=True)
     if dropped:
         log.info("Closed %d open question(s)", len(dropped))
     return sorted(dropped)

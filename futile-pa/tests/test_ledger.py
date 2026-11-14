@@ -2,9 +2,11 @@
 the check-in asked and when Andre replied.
 
 No database: a fake db answers the ledger's two queries. The context store is
-redirected to a temp directory and the suite refuses to run unless that took.
-Run on the server, a write to the real ~/.personal-context/context.json would
-overwrite the live agent's state, so the redirect is checked, not assumed.
+swapped for context_store.MemoryBackend and the suite refuses to run unless that
+took. Run on the server, a write to the real store would overwrite the live
+agent's state, so the swap is checked, not assumed. The memory backend refuses
+a code-owned key written without code=True, as the database does, so the
+ledger's own declaration is under test here too.
 
 The assistant package is loaded without running its __init__, which calls
 load_dotenv() and set_db() (handoff §9: that silently swaps database handles).
@@ -17,7 +19,6 @@ import importlib
 import logging
 import pathlib
 import sys
-import tempfile
 import types
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -32,12 +33,10 @@ sys.modules[PKG] = _pkg
 context_store = importlib.import_module(f"{PKG}.context_store")
 task_ids = importlib.import_module(f"{PKG}.task_ids")
 
-REAL_STORE = context_store.STORE_PATH
-_tmp = tempfile.TemporaryDirectory(prefix="ledger-test-")
-context_store.STORE_PATH = pathlib.Path(_tmp.name) / "context.json"
-if not str(context_store.STORE_PATH).startswith(_tmp.name):
+REAL_BACKEND = context_store.backend()
+context_store.use_backend(context_store.MemoryBackend())
+if not isinstance(context_store.backend(), context_store.MemoryBackend):
     sys.exit("REFUSING: context store redirect did not take; would write the real store")
-_real_before = REAL_STORE.stat().st_mtime_ns if REAL_STORE.exists() else None
 
 ledger = importlib.import_module(f"{PKG}.ledger")
 if ledger.context_store is not context_store:
@@ -63,10 +62,9 @@ def section(t: str) -> None:
 
 
 def reset(state: dict | None = None) -> None:
-    if context_store.STORE_PATH.exists():
-        context_store.STORE_PATH.unlink()
+    context_store.use_backend(context_store.MemoryBackend())
     for k, v in (state or {}).items():
-        context_store.set("task_agent", k, v)
+        context_store.set("task_agent", k, v, code=True)
 
 
 def state() -> dict:
@@ -228,8 +226,8 @@ check("deleting another whole category is allowed",
 
 # ---------------------------------------------------------------------------
 section("Isolation")
-after = REAL_STORE.stat().st_mtime_ns if REAL_STORE.exists() else None
-check("the real context store was not touched", after == _real_before, f"{_real_before} -> {after}")
+check("the real context store was not touched (its database service was never created)",
+      getattr(REAL_BACKEND, "_svc", "absent") is None, repr(getattr(REAL_BACKEND, "_svc", "absent")))
 
 print(f"\n{'=' * 60}")
 print(f"{passed} passed, {len(failed)} failed")

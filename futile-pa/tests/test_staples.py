@@ -54,8 +54,8 @@ _pkg.__path__ = [str(HERE.parent / "assistant")]
 sys.modules[PKG] = _pkg
 context_store = importlib.import_module(f"{PKG}.context_store")
 _tmp = tempfile.TemporaryDirectory(prefix="staples-test-")
-context_store.STORE_PATH = pathlib.Path(_tmp.name) / "context.json"
-if not str(context_store.STORE_PATH).startswith(_tmp.name):
+context_store.use_backend(context_store.MemoryBackend())
+if not isinstance(context_store.backend(), context_store.MemoryBackend):
     sys.exit("REFUSING: context store redirect did not take; would write the real store")
 checkin = importlib.import_module(f"{PKG}.checkin")
 task_ids = importlib.import_module(f"{PKG}.task_ids")

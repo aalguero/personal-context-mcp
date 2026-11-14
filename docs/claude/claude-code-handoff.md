@@ -294,6 +294,10 @@ one real date. Used for the seven cords of firewood and the garlic.
 - **`filter_outbound` extracts task ids** with the pattern in `assistant/task_ids.py`
   (`(171)`, `task 171`, and a line starting `171)`), and a hit on a sensitive project
   redacts the whole line. Render `coffee — 2 lb`, never `coffee (2 lb)`.
+- **Migration 009 moves the context store into Postgres** (`architecture/context-store.md`):
+  schema `profile`, walled off from `pa_sql`, full history, scoping tiers, and agent state
+  in `pa.agent_state`. Written 2026-11-13; **check `deployment-status.md` for whether it is
+  live** before trusting either this entry or the next. Until it is:
 - **`context.json` is written by three processes through two implementations**
   (`assistant/context_store.py` and `server.py`'s own `ContextStore`), each with only
   a per-process lock (task 223). Its `.1–.3`

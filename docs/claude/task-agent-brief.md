@@ -220,7 +220,9 @@ truth about its own priority.
 - Drop or delete a task unless Andre says so in that exchange, in those words.
 - Change importance on its own judgement. His word, or leave it.
 - Restructure projects, areas or goals.
-- Touch `/home/dremon/.personal-context/context.json` other than through `set_context`.
+- Touch the context store other than through `get_context` / `set_context` (it was
+  `context.json`; since migration 009 it is in Postgres, and some categories are not
+  yours to read: a refusal saying a category is sensitive is the design, not an error).
 - **Create a task for a shopping item.** Groceries, hardware and the like live on
   shopping lists, not in `pa.task`. This run has no shopping tools, deliberately. If a
   check-in reply mentions something to buy, say he can text it to the bot ("add

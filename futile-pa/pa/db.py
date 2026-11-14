@@ -40,6 +40,10 @@ DEFAULT_SEARCH_PATH = "pa, public"
 # the server that the rest of the assistant depends on.
 READ_TIMEOUT_MS = int(os.environ.get("PA_READ_TIMEOUT_MS", "5000"))
 
+# The role read_only() switches to (migration 009). A constant, not config: an
+# environment variable that could name a broader role would undo the wall.
+READ_ROLE = "pa_reader"
+
 
 def dsn() -> str:
     """Connection string, from PA_DATABASE_URL or DATABASE_URL.
@@ -177,7 +181,7 @@ class Db:
                   limit: int = 200) -> list[dict]:
         """Run a caller-supplied SELECT with the brakes on.
 
-        Three independent guards, because one is not enough:
+        Four independent guards, because one is not enough:
           1. the transaction is declared READ ONLY, so Postgres itself refuses
              any write regardless of what the statement text looks like;
           2. a statement timeout, so a cartesian join cannot hang the server;
@@ -193,6 +197,11 @@ class Db:
         with psycopg.connect(self.url, row_factory=dict_row) as c:
             c.read_only = True
             with c.cursor() as cur:
+                # 4. pa_reader: SELECT on schema pa, nothing on schema profile
+                #    (migration 009). This is what walls the personal context
+                #    store off from ad-hoc SQL, which the agents also hold. No
+                #    fallback: if the role cannot be assumed, the query fails.
+                cur.execute(f"set local role {READ_ROLE}")
                 cur.execute(f"set local search_path to {DEFAULT_SEARCH_PATH}")
                 cur.execute(f"set local statement_timeout = {READ_TIMEOUT_MS}")
                 cur.execute(sql, params or ())

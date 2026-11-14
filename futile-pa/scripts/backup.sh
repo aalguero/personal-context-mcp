@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Encrypted, verified backup of the futile-pa system: the Postgres database,
-# context.json, .env, and enough of the systemd unit to rebuild from bare
-# metal. Ships to a local server copy, an rsync target on vocalassistant (the
+# Encrypted, verified backup of the futile-pa system: the Postgres database
+# (which holds the personal context store since migration 009), .env, and
+# enough of the systemd unit to rebuild from bare metal. Ships to a local server copy, an rsync target on vocalassistant (the
 # always-on Pi), and B2 — whichever of those destinations are configured.
 #
 # Encryption key: PA_BACKUP_AGE_RECIPIENT is a public age key. This machine
@@ -257,6 +257,11 @@ if [[ "$RESULT" == "ok" ]]; then
     mkdir -p "$BUNDLE"
     cp "$DUMP_FC" "$DUMP_SQL_GZ" "$BUNDLE/"
 
+    # The context store moved into Postgres with migration 009, so the dump
+    # above carries it. This block copies context.json only while it still
+    # exists, i.e. before the 009 cutover; the cutover moves it aside, and
+    # from then on nothing is copied. Kept so the order of deploy steps cannot
+    # leave a night with the store in neither place.
     if [[ -f /home/dremon/.personal-context/context.json ]]; then
         mkdir -p "$BUNDLE/personal-context"
         cp -a /home/dremon/.personal-context/context.json* "$BUNDLE/personal-context/" 2>/dev/null || true

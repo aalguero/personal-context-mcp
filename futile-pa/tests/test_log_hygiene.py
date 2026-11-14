@@ -43,8 +43,8 @@ sys.modules[PKG] = _pkg
 
 context_store = importlib.import_module(f"{PKG}.context_store")
 _tmp = tempfile.TemporaryDirectory(prefix="log-hygiene-test-")
-context_store.STORE_PATH = pathlib.Path(_tmp.name) / "context.json"
-if not str(context_store.STORE_PATH).startswith(_tmp.name):
+context_store.use_backend(context_store.MemoryBackend())
+if not isinstance(context_store.backend(), context_store.MemoryBackend):
     sys.exit("REFUSING: context store redirect did not take; would write the real store")
 
 agent_loop = importlib.import_module(f"{PKG}.agent_loop")

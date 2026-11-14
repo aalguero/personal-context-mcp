@@ -101,12 +101,10 @@ class Server:
         env.update({"PA_AUTH_TOKEN": "", "PA_SHOP_TOKEN": "",
                     "PA_AUTH_ALLOW_PATH": "0", "PA_SHOP_ALLOW_PATH": "0"})
         env.update(env_extra)
-        # A context store in a temp dir: never the real one.
-        self.store = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / f"scopes-ctx-{self.port}.json"
+        # The context store is the scratch database's (migration 009).
         self.fh = open(self.log, "w")
         self.proc = subprocess.Popen(
-            [sys.executable, str(SERVER), "--http", "--host", "127.0.0.1", "--port", str(self.port),
-             "--store", str(self.store)],
+            [sys.executable, str(SERVER), "--http", "--host", "127.0.0.1", "--port", str(self.port)],
             env=env, stdout=self.fh, stderr=subprocess.STDOUT, cwd=str(REPO))
 
     def wait_ready(self, timeout: float = 20) -> bool:
@@ -134,7 +132,6 @@ class Server:
         self.fh.close()
         text = self.log.read_text()
         self.log.unlink(missing_ok=True)
-        self.store.unlink(missing_ok=True)
         return text
 
 
@@ -203,7 +200,7 @@ try:
         ("get_context", {}),
         ("pa_shop_remove", {"items": ["zqscope beans"]}),
     ]))
-    check("full token lists every tool (34)", len(full["tools"]) == 34, str(len(full["tools"])))
+    check("full token lists every tool (36)", len(full["tools"]) == 36, str(len(full["tools"])))
     check("full token can call a task tool", "error" not in full["calls"][0][:200].lower()
           and "Unknown tool" not in full["calls"][0], full["calls"][0][:120])
     check("shop token lists exactly pa_shop_add and pa_shop_list", shop["tools"] == ALL_SCOPED,
@@ -251,6 +248,39 @@ check("the full token appears nowhere in the server's output", FULL not in log)
 check("the path request was logged, redacted", "/t/<redacted>/mcp" in log, log[-400:])
 check("positive control: path requests really were access-logged",
       log.count("/t/<redacted>") >= 2, str(log.count("/t/<redacted>")))
+
+# ===========================================================================
+section("Context tiers through the real server (migration 009)")
+# A sensitive category and a normal one, written straight to the scratch
+# database; the zqscope marker is what the checks look for.
+db.execute("insert into profile.category(slug, tier, description) values ('zqscope_med', 'sensitive', 'test') "
+           "on conflict (slug) do update set tier = 'sensitive'")
+db.execute("insert into profile.entry(category, key, value) values ('zqscope_med', 'k', '\"zqscope secret\"') "
+           "on conflict (category, key) do update set value = excluded.value")
+db.execute("insert into profile.category(slug) values ('zqscope_hob') on conflict do nothing")
+db.execute("insert into profile.entry(category, key, value) values ('zqscope_hob', 'k', '\"zqscope hobby\"') "
+           "on conflict (category, key) do update set value = excluded.value")
+srv = Server({"PA_AUTH_TOKEN": FULL})
+check("server starts", srv.wait_ready())
+try:
+    ctx = run(session_calls(srv.url(), {"Authorization": f"Bearer {FULL}"}, [
+        ("get_context", {}),
+        ("get_context", {"category": "zqscope_med"}),
+        ("context_category", {"category": "zqscope_med"}),
+        ("set_context", {"category": "task_agent", "key": "open_questions", "value": {}}),
+        ("context_history", {"category": "zqscope_med"}),
+    ]))
+    every, by_name, cat, refused, hist = ctx["calls"]
+    check("unscoped get_context includes the normal category", "zqscope hobby" in every, every[:200])
+    check("unscoped get_context leaves the sensitive content out", "zqscope secret" not in every)
+    check("...and names it in the sensitive index", "zqscope_med" in every and "not included" in every)
+    check("by name, the full token reads it (scoping, not security)", "zqscope secret" in by_name, by_name[:200])
+    check("context_category shows the tier", '"tier": "sensitive"' in cat, cat[:200])
+    check("set_context on a code-owned key is refused", "task 213" in refused, refused[:200])
+    check("context_history answers", "History" in hist, hist[:200])
+finally:
+    log = srv.stop()
+check("no context value reached the server's log", "zqscope secret" not in log and "zqscope hobby" not in log)
 
 print(f"\n{'=' * 60}")
 print(f"{passed} passed, {len(failed)} failed")

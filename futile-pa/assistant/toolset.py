@@ -30,6 +30,7 @@ from pa.shop import SHOP_TOOLS as _SHOP_TOOLS
 from pa.shop import dispatch as _shop_dispatch
 from pa.tools import TOOLS as _PA_TOOLS
 from pa.tools import dispatch as _pa_dispatch
+from pa.profile import ContextError as _ContextError
 
 from . import context_store as _ctx
 from . import ledger as _ledger
@@ -83,18 +84,34 @@ if _overlap:
     raise RuntimeError(f"shop tool names collide with the base registry: {sorted(_overlap)}")
 
 
+def _refusal(exc: Exception) -> dict:
+    """pa.profile.ContextError text is written for the model and carries no
+    value, so it is returned as-is. Anything else is re-raised: a database
+    failure belongs to the tool loop's own error handling, not to a refusal."""
+    if isinstance(exc, _ContextError):
+        return {"error": str(exc)}
+    raise exc
+
+
 def dispatch(name: str, args: dict[str, Any] | None = None) -> Any:
     args = dict(args or {})
     if name == "get_context":
-        return _ctx.get(args.get("category"))
+        try:
+            return _ctx.get(args.get("category"))
+        except Exception as exc:   # a refusal, e.g. a sensitive category (pa.profile.Withheld)
+            return _refusal(exc)
     if name == "set_context":
         # dispatch() is the model's route to the store. Code writes the
         # ledger's keys through context_store directly, so this refusal
-        # applies only to the model (task 213).
+        # applies only to the model (task 213). The database refuses the same
+        # keys without code=True, which this path never passes.
         refused = _ledger.refuse_model_write(args.get("category"), args.get("key"))
         if refused:
             return refused
-        _ctx.set(args["category"], args["key"], args["value"])
+        try:
+            _ctx.set(args["category"], args["key"], args["value"])
+        except Exception as exc:
+            return _refusal(exc)
         return {"ok": True}
     return _pa_dispatch(name, args)
 
